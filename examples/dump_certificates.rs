@@ -6,6 +6,7 @@
 use std::path::PathBuf;
 
 use myna_card::ap::jpki::JpkiAp;
+use myna_card::certificate::roots::Accept;
 use myna_card::{Retries, transport::pcsc};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -31,18 +32,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("{}: {} bytes", path.display(), der.len());
     }
 
-    // One link of the chain, and only one: this says the CA in EF 000B signed the certificate in
-    // EF 000A. Both came off the same card, so it says nothing about whether that CA is genuine.
     let auth = jpki.read_auth_certificate()?;
     let ca = jpki.read_auth_ca_certificate()?;
     println!("\nsubject: {}", auth.subject());
     println!("issuer:  {}", auth.issuer());
     let (from, until) = auth.validity();
     println!("valid:   {from} to {until}");
-    match auth.verify_signature(&ca) {
-        Ok(()) => println!("signed by the CA certificate on the card: yes"),
-        Err(err) => println!("signed by the CA certificate on the card: no ({err})"),
-    }
+
+    // Two checks that look alike. The first ends at a certificate that came off the same card, so
+    // it establishes internal consistency and nothing else. The second ends at a root the crate
+    // carries, which the card had no say in — that is the one that means something.
+    let say = |result: Result<(), myna_card::Error>| match result {
+        Ok(()) => "yes".to_owned(),
+        Err(err) => format!("no ({err})"),
+    };
+    println!(
+        "signed by the CA certificate on the card: {}",
+        say(auth.verify_signature(&ca))
+    );
+    println!(
+        "reaches a published root:                {}",
+        say(auth.verify_to_root(from, Accept::ProductionOnly))
+    );
+    // A test card reaches none, and asking for the test hierarchy is how you say so out loud.
+    // Never do this where the answer decides whether to believe a cardholder.
+    println!(
+        "reaches a root incl. the test hierarchy: {}",
+        say(auth.verify_to_root(from, Accept::ProductionAndTest))
+    );
 
     match jpki.auth_pin_retries()? {
         Retries::Remaining(n) => println!("authentication PIN: {n} attempt(s) remaining"),

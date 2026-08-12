@@ -10,16 +10,19 @@
 //! value is only ever presented to the key it belongs to, so no retry counter is spent on a wrong
 //! attempt.
 //!
-//! Everything read is also checked. The 券面 applications each carry a card-verifiable certificate
-//! whose CA key is *not* on the card, so it is resolved from the table in `myna_card::ca`; the
-//! records are then checked against the key that certificate certifies. Both steps matter: the
-//! first says the data came from an issuer, the second says it belongs to this data.
+//! Everything read is also checked, and the output distinguishes two things that look alike. The
+//! 券面 applications each carry a card-verifiable certificate whose CA key is *not* on the card, so
+//! it is resolved from the table in `myna_card::ca` and the records are then checked against the
+//! key that certificate certifies. The 公的個人認証AP's certificates can be checked twice over:
+//! against the CA certificate the card hands over, which only says the card is self-consistent,
+//! and against a root the crate carries, which the card had no say in.
 
 use std::collections::HashMap;
 
 use myna_card::Certificate;
 use myna_card::ap::jpki::SignatureScheme;
 use myna_card::ap::{common::CommonAp, jpki::JpkiAp, surface::SurfaceAp, text::TextAp};
+use myna_card::certificate::roots::Accept;
 use myna_card::data::CardVerifiableCertificate;
 use myna_card::mf::{self, MasterFile};
 use myna_card::{Pin, Retries, transport::pcsc};
@@ -40,6 +43,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let get = |k: &str| args.get(k).map(String::as_str);
     let out = std::path::PathBuf::from(get("out").unwrap_or("."));
+    // Kept so the 券面事項確認AP can be checked against it: two files, one municipality code,
+    // and nothing signs either of them.
+    let municipality;
 
     let mut card = pcsc::connect_any()?;
 
@@ -89,6 +95,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             info.prefecture_code()
         );
         println!("  expires      {}", info.expiry);
+        municipality = info.municipality_code.clone();
     }
 
     println!("\n== 券面入力補助AP ==");
@@ -100,6 +107,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             cert.subject_key_id,
             cert.issuer_key_id,
             outcome(cert.verify())
+        );
+
+        // Free to read. The key it names is not the one the certificate above certifies, and
+        // what it is for is not established.
+        let basic = text.read_ap_basic_data()?;
+        println!(
+            "  AP basic     names key {}, {} B trailing",
+            basic.public_key_id,
+            basic.trailing.len()
         );
 
         if let Some(pin) = get("pin") {
@@ -161,6 +177,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             outcome(cert.verify())
         );
         let issuer = &cert.public_key;
+
+        // Also free to read, and it repeats the municipality code. Nothing signs either copy, so
+        // the two agreeing is worth a line.
+        let basic = surface.read_ap_basic_data()?;
+        println!(
+            "  AP basic     municipality {}{}, 照合番号 encrypted to {}",
+            basic.municipality_code,
+            if municipality == basic.municipality_code {
+                " (agrees with 共通カードAP)"
+            } else {
+                " (DISAGREES with 共通カードAP)"
+            },
+            basic.encrypted_reference_number.key_id
+        );
 
         if let Some(dob) = get("birth-date") {
             surface.verify_birth_date(&Pin::numeric(dob)?)?;
@@ -241,16 +271,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::fs::write(&path, &der)?;
             println!("  {label:<12} {} bytes -> {}", der.len(), path.display());
         }
-        // Leaf first, as the card hands them over. Both ends came off the same card, so this is
-        // internal consistency, not proof that either is genuine.
+        // Two checks that look alike and are not. The first ends at the CA certificate in EF
+        // 000B — the same card, so it says only that the card is internally consistent. The
+        // second ends at a root the crate carries, which the card had no say in.
         let chain = [
             jpki.read_auth_certificate()?,
             jpki.read_auth_ca_certificate()?,
         ];
         let (issued, _) = chain[0].validity();
         println!(
-            "  chain        auth <- auth-ca  [{}]",
+            "  card's CA    auth <- auth-ca  [{}]",
             outcome(Certificate::verify_chain(&chain, issued))
+        );
+        println!(
+            "  to a root    production only  [{}]",
+            outcome(chain[0].verify_to_root(issued, Accept::ProductionOnly))
+        );
+        // A test card reaches no published root; asking for the test hierarchy is how you say so
+        // out loud. Never do this where the answer decides whether to believe a cardholder.
+        println!(
+            "               test accepted   [{}]",
+            outcome(chain[0].verify_to_root(issued, Accept::ProductionAndTest))
         );
 
         // Reported, never guessed at: an empty VERIFY costs nothing.
