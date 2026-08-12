@@ -15,8 +15,9 @@ each application's `read_ef`.
 
 ```
 ap::{common, juki, surface, text, jpki}   which application owns which file, and its access rules
-mf::MasterFile                            the MF-level files JICSAP defines (001E, 2F10, 2F11)
-card::Card                                SELECT FILE, READ BINARY, READ RECORD, VERIFY
+mf::MasterFile                            the master file level: GET DATA objects, and the
+                                          files JICSAP defines there (001E, 2F10, 2F11)
+card::Card                                SELECT FILE, READ BINARY, READ RECORD, VERIFY, GET DATA
 apdu::{Command, Response, StatusWord}     ISO/IEC 7816-4 encoding — no I/O
 data::{...}                               the values the card stores, and the credentials
 certificate::Certificate                  the JPKI X.509 certificates (feature `verify`)
@@ -97,13 +98,30 @@ elsewhere; the RSA and X.509 dependencies go with it.
 #### Card-verifiable certificates
 
 `CardVerifiableCertificate::verify()` resolves the CA key from the certificate's 証明者鍵ID using
-the table in `ca`, or take `verify_with()` to supply one yourself.
+the table in `ca`, or take `verify_with()` to supply one yourself. `verify_chain()` walks a chain,
+resolving a key for the root only and checking each later link against the one above it.
 
 The table holds six keys: the three production 証明者鍵ID and the three matching ones of the test
 hierarchy JPKI test cards are issued under. Certificates from either verify without a key being
 supplied by hand, and so do the intermediates below them, whose keys travel inside the certificate
 above. Any other 証明者鍵ID returns `UnknownCertificateAuthority` — nothing was checked, which is a
 different answer from a bad signature and is reported as one.
+
+### The master file level
+
+No elementary file under the MF is readable on this card, but GET DATA answers there. `MasterFile`
+exposes what is: the card identification number, the issuing municipality, the expiry date, and a
+chain of card-verifiable certificates that needs a CA key only for its root.
+
+```rust
+card.transport_mut().power_cycle()?;      // GET DATA answers only with no application selected
+let mut mf = MasterFile::new(&mut card);
+CardVerifiableCertificate::verify_chain(&mf.certificate_chain()?)?;
+```
+
+`Card::contact_atr()` returns the card's real contact-interface ATR, checksum verified — a
+contactless reader reports one it made up instead. Which state answers varies between cards: some
+return it at the MF level and some only with an application selected.
 
 ### Reading a card
 
@@ -143,12 +161,9 @@ every attempt after that. A key with no retry limit answers `6300` and never rep
 
 - Full certificate validation. `Certificate::verify_signature` checks one link against the issuer
   you hand it; nothing walks a chain on its own, checks names or key usage, or consults revocation.
-- GET DATA. `00 CA` is not a JICSAP command and is not in this crate, but the card implements it,
-  and with no DF selected it is the only way to reach a further fourteen data objects — among them
-  the card's contact-interface ATR, its identification number, and two more card-verifiable
-  certificates.
-- The files that stay unidentified: 公的個人認証AP `0008` and `0009`, and the trailing 128 bytes of
-  券面入力補助AP `0005`.
+- The files that stay unidentified: 公的個人認証AP `0008` and `0009`, 券面事項確認AP `0006` and
+  券面入力補助AP `0008` — both sixteen `FF` bytes — and the trailing 128 bytes of 券面入力補助AP
+  `0005`.
 - Secure messaging (JICSAP 5.3) and the extended system commands. The card refuses every secure
   messaging class byte — 6882 to SELECT FILE, and 69FC to READ BINARY and VERIFY under `08` and
   `0C` — so there is nothing on the other side to talk to; the extended commands' instruction bytes

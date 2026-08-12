@@ -31,8 +31,16 @@
 //!
 //! The module is kept because it is what JICSAP specifies, and other cards built to the same
 //! specification do carry these files.
+//!
+//! # What is there instead
+//!
+//! The MF level is not empty — it is just not reachable through files. GET DATA answers there,
+//! and only there, for a set of objects that includes the card's contact-interface ATR, its
+//! identification number, the issuing municipality and expiry date, and a chain of
+//! card-verifiable certificates. See [`tag`] and [`MasterFile::data_object`].
 
 use crate::card::Card;
+use crate::data::CardVerifiableCertificate;
 use crate::error::{Error, Result};
 use crate::tlv::simple;
 use crate::transport::Transmit;
@@ -45,6 +53,33 @@ pub mod ef {
     pub const APPLICATION_FOLDER_LIST: u16 = 0x2F10;
     /// IC manufacturer ID file (Annex F).
     pub const IC_MANUFACTURER_ID: u16 = 0x2F11;
+}
+
+/// Tags of the data objects GET DATA answers for with the master file current.
+///
+/// Every one of these was found by sweeping P1-P2; the card publishes no index. Which are present
+/// varies between cards, so treat a 6A88 as an ordinary answer rather than a fault.
+pub mod tag {
+    /// Issuer identification number, a 16 byte key reference.
+    pub const ISSUER_IDENTIFICATION: u16 = 0x0042;
+    /// Card identification number, ASCII.
+    pub const CARD_IDENTIFICATION: u16 = 0x0045;
+    /// Card recognition data: GlobalPlatform's, under the arc 1.2.840.114283.
+    pub const CARD_RECOGNITION: u16 = 0x0066;
+    /// 全国地方公共団体コード of the issuing municipality, five ASCII digits.
+    pub const MUNICIPALITY_CODE: u16 = 0x00F0;
+    /// Expiry date, eight ASCII digits.
+    pub const EXPIRY: u16 = 0x00F2;
+    /// 証明者鍵ID of the intermediate that signs [`CHAIN_LOWER`].
+    pub const INTERMEDIATE_KEY_ID: u16 = 0x00F7;
+    /// A card-verifiable certificate: the root certifying the intermediate.
+    pub const CHAIN_UPPER: u16 = 0x00F8;
+    /// A card-verifiable certificate: the intermediate certifying the key below it. Absent on
+    /// some cards.
+    pub const CHAIN_LOWER: u16 = 0x7F21;
+    /// The contact interface ATR, without its initial `TS`. Answers with an application current
+    /// too, and on some cards *only* then, so it lives on [`Card::contact_atr`](crate::card::Card::contact_atr).
+    pub const CONTACT_ATR: u16 = 0x5F51;
 }
 
 /// The master file, selected on a card.
@@ -70,6 +105,32 @@ impl<'a, T: Transmit> MasterFile<'a, T> {
     /// Borrow the underlying card, for operations this wrapper does not cover.
     pub fn card(&mut self) -> &mut Card<T> {
         self.card
+    }
+
+    /// Retrieve one of the MF level data objects; see [`tag`].
+    ///
+    /// This is GET DATA, not a file read, so it works even though the MF holds no readable EF.
+    pub fn data_object(&mut self, tag: u16) -> Result<Vec<u8>> {
+        self.card.get_data(tag)
+    }
+
+    /// The card-verifiable certificates at the MF level, root first.
+    ///
+    /// One or two, depending on the card: [`tag::CHAIN_UPPER`] is always there, and
+    /// [`tag::CHAIN_LOWER`] is missing on older cards. Consecutive entries chain — the second is
+    /// signed by the key the first certifies — and only the first needs a CA key from
+    /// [`crate::ca`], which is what makes the pair self-contained.
+    pub fn certificate_chain(&mut self) -> Result<Vec<CardVerifiableCertificate>> {
+        let mut chain = Vec::new();
+        for tag in [tag::CHAIN_UPPER, tag::CHAIN_LOWER] {
+            match self.data_object(tag) {
+                Ok(raw) => chain.push(CardVerifiableCertificate::parse(&raw)?),
+                // The card says it has no such object; that is an absence, not a failure.
+                Err(Error::Status(sw)) if matches!(sw.value(), 0x6A88 | 0x6A82) => break,
+                Err(err) => return Err(err),
+            }
+        }
+        Ok(chain)
     }
 
     /// Read the card identifier (Annex B).
@@ -403,6 +464,52 @@ mod tests {
         assert_eq!(id.country(), Some("JP"));
         assert_eq!(id.ic_manufacturer, 0x07);
         assert_eq!(id.ic_type, 0x1234);
+    }
+
+    #[test]
+    fn get_data_falls_back_to_an_extended_le() {
+        // The card refuses a short Le for the large objects rather than reporting the length, so
+        // the first attempt is spent finding that out.
+        let big = vec![0xAA; 300];
+        let mut card = Card::new(MockTransport::new([
+            vec![0x67, 0x00],
+            [big.clone(), vec![0x90, 0x00]].concat(),
+        ]));
+        let mut mf = MasterFile::new(&mut card);
+        assert_eq!(mf.data_object(tag::CHAIN_UPPER).unwrap(), big);
+        assert_eq!(
+            mf.card().transport().sent,
+            vec![
+                vec![0x00, 0xCA, 0x00, 0xF8, 0x00],
+                vec![0x00, 0xCA, 0x00, 0xF8, 0x00, 0x00, 0x00],
+            ]
+        );
+    }
+
+    #[test]
+    fn get_data_uses_one_apdu_when_the_object_is_small() {
+        let mut card = Card::new(MockTransport::new([vec![
+            b'1', b'3', b'2', b'2', b'1', 0x90, 0x00,
+        ]]));
+        let mut mf = MasterFile::new(&mut card);
+        assert_eq!(mf.data_object(tag::MUNICIPALITY_CODE).unwrap(), b"13221");
+        assert_eq!(mf.card().transport().sent.len(), 1);
+    }
+
+    #[test]
+    fn a_missing_second_certificate_ends_the_chain_rather_than_failing() {
+        let cert = std::fs::read(format!(
+            "{}/tests/fixtures/mf-do-F8.bin",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        let mut card = Card::new(MockTransport::new([
+            [cert.clone(), vec![0x90, 0x00]].concat(),
+            vec![0x6A, 0x88],
+        ]));
+        let chain = MasterFile::new(&mut card).certificate_chain().unwrap();
+        assert_eq!(chain.len(), 1);
+        assert!(chain[0].issuer_key_id.starts_with(b"6000020"));
     }
 
     #[test]

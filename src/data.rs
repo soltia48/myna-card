@@ -319,18 +319,26 @@ impl CardVerifiableCertificate {
     /// Length of the body: two key identifiers and an RSA-2048 public key.
     pub const BODY_LEN: usize = 297;
 
-    /// Parse a `7F21` object.
+    /// Parse a certificate, with or without its `7F21` template.
+    ///
+    /// A certificate read out of an EF carries the template. GET DATA hands back the template's
+    /// contents instead, so both forms turn up on the same card and both are accepted here.
     pub fn parse(data: &[u8]) -> Result<Self> {
-        let outer = ber::parse(data)?;
-        if outer.tag != Self::TAG {
-            return Err(malformed(&format!(
-                "expected tag 7F21, got {:04X}",
-                outer.tag
-            )));
-        }
+        let contents = if data.starts_with(&[0x7F, 0x21]) {
+            let outer = ber::parse(data)?;
+            if outer.tag != Self::TAG {
+                return Err(malformed(&format!(
+                    "expected tag 7F21, got {:04X}",
+                    outer.tag
+                )));
+            }
+            outer.value
+        } else {
+            data
+        };
         let mut body = None;
         let mut signature = None;
-        for tlv in ber::iter(outer.value) {
+        for tlv in ber::iter(contents) {
             let tlv = tlv?;
             match tlv.tag {
                 Self::TAG_BODY => body = Some(tlv.value),
@@ -819,6 +827,36 @@ impl CardVerifiableCertificate {
             )
         })?;
         self.verify_with(&ca.to_public_key())
+    }
+
+    /// Check a chain: the first certificate against [`crate::ca`], each later one against the key
+    /// the certificate before it certifies.
+    ///
+    /// This is what makes the master file chain self-contained — only its root needs a key that
+    /// did not come off the card. The links are checked in order and the first failure is
+    /// returned, so a chain that verifies here verifies as a whole.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Malformed`] if the chain is empty or two consecutive certificates do not link,
+    /// and whatever [`verify`](Self::verify) or [`verify_with`](Self::verify_with) reports
+    /// otherwise.
+    pub fn verify_chain(chain: &[Self]) -> Result<()> {
+        let (first, rest) = chain
+            .split_first()
+            .ok_or_else(|| malformed("an empty chain verifies nothing"))?;
+        first.verify()?;
+        let mut issuer = first;
+        for cert in rest {
+            if cert.issuer_key_id != issuer.subject_key_id {
+                return Err(malformed(
+                    "chain is broken: a certificate names an issuer the one above does not certify",
+                ));
+            }
+            cert.verify_with(&issuer.public_key)?;
+            issuer = cert;
+        }
+        Ok(())
     }
 
     /// Check the certificate against a CA key you supply.

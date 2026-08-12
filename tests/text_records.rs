@@ -3,7 +3,7 @@
 #![cfg(feature = "verify")]
 
 use myna_card::Certificate;
-use myna_card::ap::text::{IntegrityRecord, SignedPublicKey, UnidentifiedKey};
+use myna_card::ap::text::{IntegrityRecord, SessionKeyPublicKey, SignedPublicKey};
 use myna_card::data::CardVerifiableCertificate;
 
 fn fixture(name: &str) -> Vec<u8> {
@@ -52,8 +52,8 @@ fn the_integrity_record_vouches_for_the_attributes_file() {
     // This digest skips the offset table, so it is not a digest of the file — the two obvious
     // guesses both fail.
     use myna_card::data::sha256;
-    assert_ne!(sha256(&attributes), record.second_digest);
-    assert_ne!(sha256(&attributes[3..]), record.second_digest);
+    assert_ne!(sha256(&attributes), record.attributes_digest);
+    assert_ne!(sha256(&attributes[3..]), record.attributes_digest);
 
     // And it is not the rule the 個人番号 file follows either.
     let my_number = fixture("text-0001-physical.bin");
@@ -83,10 +83,11 @@ fn the_signing_key_record_verifies_and_is_a_different_key() {
         .expect("signed public key signature");
     assert_eq!(signed.public_key.bits(), 2048);
 
-    // EF 0006 holds yet another key, and it is neither of the two we can account for.
-    let other = UnidentifiedKey::parse(&fixture("text-0006.bin")).unwrap();
-    assert_ne!(other.public_key, signed.public_key);
-    assert_ne!(other.public_key, issuer_key());
+    // EF 0006 holds a third key, for encrypting a session key to the card. It signs nothing, so
+    // it must be neither the card's signing key nor the issuer's.
+    let session = SessionKeyPublicKey::parse(&fixture("text-0006.bin")).unwrap();
+    assert_ne!(session.public_key, signed.public_key);
+    assert_ne!(session.public_key, issuer_key());
 }
 
 #[test]

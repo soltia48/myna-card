@@ -31,10 +31,10 @@ pub mod ef {
     pub const INTEGRITY: u16 = 0x0003;
     /// This application's own card-verifiable certificate.
     pub const CERTIFICATE: u16 = 0x0004;
-    /// Purpose not yet identified.
-    pub const UNKNOWN_0005: u16 = 0x0005;
-    /// An RSA public key whose purpose is not identified. Unlocked by the PIN or either 照合番号.
-    pub const UNIDENTIFIED_KEY: u16 = 0x0006;
+    /// This application's basic information: an identifier and the key it names.
+    pub const AP_BASIC_DATA: u16 = 0x0005;
+    /// Public key a terminal encrypts a session key to. Unlocked by the PIN or either 照合番号.
+    pub const SESSION_KEY_PUBLIC_KEY: u16 = 0x0006;
     /// The public half of this application's signing key, with a signature over it.
     pub const SIGNED_PUBLIC_KEY: u16 = 0x0007;
     /// Purpose not yet identified; observed as sixteen 0xFF bytes.
@@ -111,12 +111,12 @@ impl<'a, T: Transmit> TextAp<'a, T> {
         SignedPublicKey::parse(&raw)
     }
 
-    /// Read the unidentified public key of EF `0006`.
+    /// Read the session key encryption public key of EF `0006`.
     ///
     /// Requires the PIN or either 照合番号.
-    pub fn read_unidentified_key(&mut self) -> Result<UnidentifiedKey> {
-        let raw = self.read_ef(ef::UNIDENTIFIED_KEY)?;
-        UnidentifiedKey::parse(&raw)
+    pub fn read_session_key_public_key(&mut self) -> Result<SessionKeyPublicKey> {
+        let raw = self.read_ef(ef::SESSION_KEY_PUBLIC_KEY)?;
+        SessionKeyPublicKey::parse(&raw)
     }
 
     /// Read the whole physical content of EF `0001`, filler included.
@@ -406,7 +406,7 @@ pub struct IntegrityRecord {
     pub my_number_digest: [u8; 32],
     /// SHA-256 of the 基本4情報 file, over its outer value **with the offset table skipped**.
     /// See [`IntegrityRecord::matches_attributes_file`].
-    pub second_digest: [u8; 32],
+    pub attributes_digest: [u8; 32],
     /// Signature over everything before it.
     pub signature: Vec<u8>,
     /// Exactly the bytes the signature covers.
@@ -426,7 +426,7 @@ impl IntegrityRecord {
         };
         Ok(IntegrityRecord {
             my_number_digest: digest(0xDF31)?,
-            second_digest: digest(0xDF32)?,
+            attributes_digest: digest(0xDF32)?,
             signature: f.get(0xDF33)?.to_vec(),
             signed_data: f.bytes_before(0xDF33)?.to_vec(),
         })
@@ -439,7 +439,7 @@ impl IntegrityRecord {
     #[cfg(feature = "verify")]
     pub fn matches_attributes_file(&self, attributes: &[u8]) -> Result<bool> {
         let source = Attributes::digest_source(attributes)?;
-        Ok(crate::data::sha256(source) == self.second_digest)
+        Ok(crate::data::sha256(source) == self.attributes_digest)
     }
 
     /// Whether `physical` is the 個人番号 file this record vouches for.
@@ -453,18 +453,19 @@ impl IntegrityRecord {
     }
 }
 
-/// The public key of EF `0006`.
+/// The session key encryption public key of EF `0006`.
 ///
-/// A bare RSA-2048 key under tag `A1`, with no signature beside it. It is not the key that signs
-/// this application's records — that one is certified in EF `0004` — and it is not the card's own
-/// signing key either, which lives in EF `0007`. What it is for is not known.
+/// A bare RSA-2048 key under tag `A1`, with no signature beside it — a terminal encrypts a session
+/// key to it. It is not the key that signs this application's records, which is certified in EF
+/// `0004`, and not the card's own signing key either, which lives in EF `0007`; nothing on the
+/// card verifies under it, and nothing should.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UnidentifiedKey {
+pub struct SessionKeyPublicKey {
     /// The key.
     pub public_key: RsaPublicKey,
 }
 
-impl UnidentifiedKey {
+impl SessionKeyPublicKey {
     /// Tag of the file.
     pub const TAG: u32 = 0xA1;
 
@@ -477,7 +478,7 @@ impl UnidentifiedKey {
                 outer.tag
             )));
         }
-        Ok(UnidentifiedKey {
+        Ok(SessionKeyPublicKey {
             public_key: RsaPublicKey::parse(outer.value)?,
         })
     }

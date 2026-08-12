@@ -34,6 +34,10 @@ pub enum Error {
     #[error("APDU data field is too long ({0} byte(s), maximum 65535)")]
     DataTooLong(usize),
 
+    /// `Le` is outside the 1 to 65536 an APDU can ask for.
+    #[error("expected response length {0} is out of range (1 to 65536)")]
+    ExpectedLengthOutOfRange(u32),
+
     /// The PIN was rejected.
     ///
     /// `retries` is the number of attempts left before the key is blocked, or `None` if the key

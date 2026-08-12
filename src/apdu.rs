@@ -51,8 +51,12 @@ pub struct Command {
     pub p2: u8,
     /// Command data field. `Lc` is derived from its length when encoding.
     pub data: Vec<u8>,
-    /// Expected response length. In the short encoding `Some(0)` means 256 bytes.
-    pub le: Option<u8>,
+    /// How many response bytes are expected, 1 to 65536, or `None` for no `Le` at all.
+    ///
+    /// The count is what the caller wants, not what goes on the wire: [`Command::to_bytes`]
+    /// chooses the short or the extended encoding and writes the zero that means "the maximum" in
+    /// whichever form it picked.
+    pub le: Option<u32>,
 }
 
 impl Command {
@@ -68,8 +72,8 @@ impl Command {
         }
     }
 
-    /// Case 2: `Le` only. Passing 0 requests 256 bytes.
-    pub fn with_le(cla: u8, ins: u8, p1: u8, p2: u8, le: u8) -> Self {
+    /// Case 2: `Le` only, expecting up to `le` bytes back.
+    pub fn with_le(cla: u8, ins: u8, p1: u8, p2: u8, le: u32) -> Self {
         Command {
             cla,
             ins,
@@ -99,7 +103,7 @@ impl Command {
         p1: u8,
         p2: u8,
         data: impl Into<Vec<u8>>,
-        le: u8,
+        le: u32,
     ) -> Self {
         Command {
             cla,
@@ -113,17 +117,24 @@ impl Command {
 
     /// Encode the command for transmission.
     ///
-    /// Uses the short form while the data field fits in 255 bytes, and the extended form beyond
-    /// that. In the extended form `Le` is widened to two bytes, as the encoding requires.
+    /// Uses the short form while the data field fits in 255 bytes and no more than 256 bytes are
+    /// expected back, and the extended form otherwise. The two forms cannot be mixed, so an
+    /// extended data field widens `Le` as well.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::DataTooLong`] if the data field exceeds 65535 bytes.
+    /// Returns [`Error::DataTooLong`] if the data field exceeds 65535 bytes, or
+    /// [`Error::ExpectedLengthOutOfRange`] if `Le` is zero or above 65536.
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
         if self.data.len() > 0xFFFF {
             return Err(Error::DataTooLong(self.data.len()));
         }
-        let extended = self.data.len() > 255;
+        if let Some(le) = self.le {
+            if le == 0 || le > 65536 {
+                return Err(Error::ExpectedLengthOutOfRange(le));
+            }
+        }
+        let extended = self.data.len() > 255 || self.le.is_some_and(|le| le > 256);
         let mut out = Vec::with_capacity(7 + self.data.len() + 2);
         out.extend_from_slice(&[self.cla, self.ins, self.p1, self.p2]);
         if !self.data.is_empty() {
@@ -137,11 +148,16 @@ impl Command {
         }
         if let Some(le) = self.le {
             if extended {
-                // The two forms cannot be mixed: an extended Lc forces an extended Le, where 0
-                // means 65536 just as a short 0 means 256.
-                out.extend_from_slice(&u16::from(le).to_be_bytes());
+                if self.data.is_empty() {
+                    // Case 2 extended: the leading zero that would have introduced Lc is still
+                    // required, so the card can tell the forms apart.
+                    out.push(0x00);
+                }
+                // 65536 wraps to 0000, which is exactly how the encoding spells "the maximum".
+                out.extend_from_slice(&(le as u16).to_be_bytes());
             } else {
-                out.push(le);
+                // Likewise 256 spells itself as a single zero byte.
+                out.push(le as u8);
             }
         }
         Ok(out)
@@ -333,7 +349,7 @@ mod tests {
             [0x00, 0xA4, 0x04, 0x0C]
         );
         assert_eq!(
-            Command::with_le(0x00, 0xB0, 0x00, 0x00, 0x00)
+            Command::with_le(0x00, 0xB0, 0x00, 0x00, 256)
                 .to_bytes()
                 .unwrap(),
             [0x00, 0xB0, 0x00, 0x00, 0x00]
@@ -345,7 +361,7 @@ mod tests {
             [0x00, 0xA4, 0x02, 0x0C, 0x02, 0x00, 0x01]
         );
         assert_eq!(
-            Command::with_data_le(0x80, 0x2A, 0x00, 0x80, [0xAA], 0x00)
+            Command::with_data_le(0x80, 0x2A, 0x00, 0x80, [0xAA], 256)
                 .to_bytes()
                 .unwrap(),
             [0x80, 0x2A, 0x00, 0x80, 0x01, 0xAA, 0x00]
@@ -370,7 +386,7 @@ mod tests {
         assert_eq!(long.len(), 7 + 307);
 
         // An extended Lc widens Le too.
-        let both = Command::with_data_le(0x80, 0xA2, 0x00, 0xC1, vec![0xAA; 300], 0x00)
+        let both = Command::with_data_le(0x80, 0xA2, 0x00, 0xC1, vec![0xAA; 300], 65536)
             .to_bytes()
             .unwrap();
         assert_eq!(both[..7], [0x80, 0xA2, 0x00, 0xC1, 0x00, 0x01, 0x2C]);

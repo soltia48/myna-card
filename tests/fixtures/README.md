@@ -27,8 +27,8 @@ actually returns rather than against something hand-built to match the parser.
 | `text-0007.bin` | `0007`, the AP's signing key with a signature over it | the PIN or either 照合番号 |
 
 These two are not in any EF. They are data objects, read with `00 CA` while no DF is selected, and
-they are stored as GET DATA returns them — the contents of the `7F21` template without the template
-itself, which is why the tests put it back before parsing:
+stored as GET DATA returns them — the contents of the `7F21` template without the template itself.
+`CardVerifiableCertificate::parse` takes either form, so they need no fixing up:
 
 | File | MF data object | Read with |
 |---|---|---|

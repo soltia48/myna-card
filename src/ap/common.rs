@@ -21,8 +21,9 @@ pub const DF: [u8; 10] = [0xD3, 0x92, 0x10, 0x00, 0x31, 0x00, 0x01, 0x01, 0x01, 
 pub mod ef {
     /// Serial number, prefecture code, municipality code and expiry date.
     pub const CARD_INFO: u16 = 0x0001;
-    /// Purpose not yet identified; the same content as EF 0002 of the 住基 application.
-    pub const UNKNOWN_0002: u16 = 0x0002;
+    /// One 16 byte key reference, byte-identical to EF `0002` of the 住基 application. Which key
+    /// it names is not identified.
+    pub const KEY_REFERENCE: u16 = 0x0002;
     /// Key reference for the PIN, which appears to be shared with the 住基 and 券面入力補助
     /// applications.
     pub const PIN: u16 = 0x001C;

@@ -16,19 +16,6 @@ fn fixture(name: &str) -> Vec<u8> {
     .unwrap_or_else(|e| panic!("reading {name}: {e}"))
 }
 
-/// A fixture, wrapped back in the `7F21` template if it was stored without one.
-///
-/// GET DATA returns the template's contents rather than the template, so the MF level
-/// certificates are on disk as bare bodies while the ones read out of an EF are complete.
-fn wrapped(name: &str) -> Vec<u8> {
-    let bytes = fixture(name);
-    if bytes.starts_with(&[0x7F, 0x21]) {
-        return bytes;
-    }
-    let len = bytes.len();
-    [vec![0x7F, 0x21, 0x82, (len >> 8) as u8, len as u8], bytes].concat()
-}
-
 /// The key that signs this application's data: the subject of the certificate in EF `0004`.
 ///
 /// Not the card's own key — that one lives inside each record and signs challenges instead.
@@ -124,7 +111,7 @@ fn the_card_key_does_not_verify_the_data_signatures() {
 /// real ones can be checked end to end; a synthetic certificate signed with a key generated here
 /// covers the tampering cases, where a real signature cannot be produced.
 mod card_verifiable_certificates {
-    use super::{fixture, wrapped};
+    use super::fixture;
     use myna_card::data::{CardVerifiableCertificate, RsaPublicKey};
 
     fn synthetic() -> (CardVerifiableCertificate, RsaPublicKey) {
@@ -140,6 +127,34 @@ mod card_verifiable_certificates {
         assert_eq!(cert.issuer_key_id, b"5000023\x08\x05001\0\0\0\0");
         assert_eq!(cert.signed_data.len(), CardVerifiableCertificate::BODY_LEN);
         cert.verify_with(&ca).expect("certificate signature");
+    }
+
+    #[test]
+    fn a_certificate_parses_with_or_without_its_template() {
+        // Read out of an EF it comes wrapped; GET DATA hands back the contents instead.
+        let wrapped = CardVerifiableCertificate::parse(&fixture("surface-0004.bin")).unwrap();
+        let body = &fixture("surface-0004.bin")[5..];
+        assert_eq!(CardVerifiableCertificate::parse(body).unwrap(), wrapped);
+
+        // And the MF level fixtures, which are stored bare, parse as they are.
+        let bare = CardVerifiableCertificate::parse(&fixture("mf-do-F8.bin")).unwrap();
+        assert!(bare.issuer_key_id.starts_with(b"6000020"));
+    }
+
+    #[test]
+    fn a_chain_needs_a_key_only_for_its_root() {
+        let chain = [
+            CardVerifiableCertificate::parse(&fixture("mf-do-F8.bin")).unwrap(),
+            CardVerifiableCertificate::parse(&fixture("mf-do-7F21.bin")).unwrap(),
+        ];
+        // The second names an issuer that is in no table, and still verifies as part of the chain.
+        assert!(chain[1].verify().is_err());
+        CardVerifiableCertificate::verify_chain(&chain).unwrap();
+
+        // Reversed, the links no longer meet.
+        let flipped = [chain[1].clone(), chain[0].clone()];
+        assert!(CardVerifiableCertificate::verify_chain(&flipped).is_err());
+        assert!(CardVerifiableCertificate::verify_chain(&[]).is_err());
     }
 
     #[test]
@@ -163,7 +178,7 @@ mod card_verifiable_certificates {
     fn the_cards_own_certificates_verify_against_the_built_in_table() {
         let (_, ca) = synthetic();
         for name in ["surface-0004.bin", "text-0004.bin", "mf-do-F8.bin"] {
-            let cert = CardVerifiableCertificate::parse(&wrapped(name)).unwrap();
+            let cert = CardVerifiableCertificate::parse(&fixture(name)).unwrap();
             // A test hierarchy: the production identifiers begin "5000".
             assert!(
                 cert.issuer_key_id.starts_with(b"6000"),
@@ -186,7 +201,7 @@ mod card_verifiable_certificates {
         // key travels in the certificate above it instead. The lookup must say so, rather than
         // claiming the signature is wrong: nothing was checked, and the two are not the same
         // answer.
-        let cert = CardVerifiableCertificate::parse(&wrapped("mf-do-7F21.bin")).unwrap();
+        let cert = CardVerifiableCertificate::parse(&fixture("mf-do-7F21.bin")).unwrap();
         let err = cert.verify().unwrap_err();
         assert!(
             matches!(err, myna_card::Error::UnknownCertificateAuthority(_)),
@@ -194,7 +209,7 @@ mod card_verifiable_certificates {
         );
 
         // It does verify under the key carried by the certificate above it, closing the chain.
-        let above = CardVerifiableCertificate::parse(&wrapped("mf-do-F8.bin")).unwrap();
+        let above = CardVerifiableCertificate::parse(&fixture("mf-do-F8.bin")).unwrap();
         assert_eq!(cert.issuer_key_id, above.subject_key_id);
         cert.verify_with(&above.public_key).unwrap();
     }

@@ -14,8 +14,8 @@ pub const DF: [u8; 10] = [0xD3, 0x92, 0x10, 0x00, 0x31, 0x00, 0x01, 0x01, 0x04, 
 
 /// File identifiers within the resident registry network application.
 pub mod ef {
-    /// Purpose not yet identified; the same content as EF 0002 of the 共通カード application.
-    pub const UNKNOWN_0002: u16 = 0x0002;
+    /// One 16 byte key reference, byte-identical to EF `0002` of the 共通カード application.
+    pub const KEY_REFERENCE: u16 = 0x0002;
     /// Key reference for the PIN.
     pub const PIN: u16 = 0x001C;
 }

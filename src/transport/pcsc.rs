@@ -71,6 +71,27 @@ impl PcscTransport {
         &self.card
     }
 
+    /// Power the card down and back up.
+    ///
+    /// This is the only thing that clears the card's security status. A warm reset does not, and
+    /// neither does disconnecting and reconnecting: whatever was verified stays verified until the
+    /// card leaves the field. It is also what makes the master file current again, which is the
+    /// state [`crate::mf::MasterFile`] needs.
+    ///
+    /// The first command after the card comes back is answered 6F00 on the card this was measured
+    /// against, so one throwaway SELECT is sent and its result discarded — otherwise every caller
+    /// would have to know that.
+    pub fn power_cycle(&mut self) -> Result<()> {
+        self.card.reconnect(
+            ::pcsc::ShareMode::Shared,
+            ::pcsc::Protocols::ANY,
+            ::pcsc::Disposition::UnpowerCard,
+        )?;
+        // 00 A4 00 00 selects nothing on this card, so it is safe to throw away.
+        let _ = self.transmit(&[0x00, 0xA4, 0x00, 0x00]);
+        Ok(())
+    }
+
     /// Give back the underlying PC/SC card.
     pub fn into_inner(self) -> ::pcsc::Card {
         self.card

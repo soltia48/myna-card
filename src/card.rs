@@ -37,6 +37,8 @@ pub mod ins {
     pub const READ_RECORD: u8 = 0xB2;
     /// GET RESPONSE. Not a JICSAP command; used to collect a chained 61xx response.
     pub const GET_RESPONSE: u8 = 0xC0;
+    /// GET DATA. Not a JICSAP command, but the card implements it; see [`Card::get_data`](super::Card::get_data).
+    pub const GET_DATA: u8 = 0xCA;
     /// COMPUTE DIGITAL SIGNATURE. Not a JICSAP command; the JPKI application's own, CLA 80.
     pub const COMPUTE_SIGNATURE: u8 = 0x2A;
     /// VERIFY CERTIFICATE. Not a JICSAP command; CLA 80.
@@ -150,13 +152,19 @@ impl<T: Transmit> Card<T> {
 
         if let Some(le) = response.status.correct_le() {
             let mut retry = command.clone();
-            retry.le = Some(le);
+            // 6C00 asks for 256, the same zero-means-maximum convention as Le itself.
+            retry.le = Some(if le == 0 { 256 } else { u32::from(le) });
             response = self.transmit_once(&retry)?;
         }
 
         while let Some(available) = response.status.more_data_available() {
-            let get_response =
-                Command::with_le(cla::USER, ins::GET_RESPONSE, 0x00, 0x00, available);
+            let get_response = Command::with_le(
+                cla::USER,
+                ins::GET_RESPONSE,
+                0x00,
+                0x00,
+                u32::from(available),
+            );
             let next = self.transmit_once(&get_response)?;
             response.data.extend_from_slice(&next.data);
             response.status = next.status;
@@ -225,10 +233,9 @@ impl<T: Transmit> Card<T> {
 
     /// A single READ BINARY of the selected transparent EF.
     ///
-    /// `le` is the short-form expected length, where 0 requests 256 bytes. Per JICSAP 6.4.1 (4),
-    /// `Le` = 0 reads to the end of the file within that limit, so the card may return fewer
-    /// bytes than requested.
-    pub fn read_binary_chunk(&mut self, offset: usize, le: u8) -> Result<Vec<u8>> {
+    /// `le` is how many bytes to ask for, at most 256. Per JICSAP 6.4.1 (4) the card reads to the
+    /// end of the file within that limit, so it may return fewer bytes than requested.
+    pub fn read_binary_chunk(&mut self, offset: usize, le: u32) -> Result<Vec<u8>> {
         if offset > MAX_OFFSET {
             return Err(Error::OffsetOutOfRange(offset));
         }
@@ -242,7 +249,12 @@ impl<T: Transmit> Card<T> {
     /// The offset is then limited to 8 bits (JICSAP Table 5: with b8 of P1 set, P1 carries the
     /// short EF identifier and only P2 is left for the address), so this reads at most the first
     /// 256 bytes of a file. It also becomes the current EF, and it clears the record pointer.
-    pub fn read_binary_chunk_sfi(&mut self, sfi: ShortEfId, offset: u8, le: u8) -> Result<Vec<u8>> {
+    pub fn read_binary_chunk_sfi(
+        &mut self,
+        sfi: ShortEfId,
+        offset: u8,
+        le: u32,
+    ) -> Result<Vec<u8>> {
         // P1 = 100xxxxx: b8 set, b7-b6 zero, b5-b1 the short EF identifier.
         let p1 = 0x80 | sfi.value();
         self.call_ok(&Command::with_le(
@@ -261,7 +273,7 @@ impl<T: Transmit> Card<T> {
         let mut out = Vec::with_capacity(length);
         while out.len() < length {
             let want = (length - out.len()).min(MAX_CHUNK);
-            let le = if want == MAX_CHUNK { 0 } else { want as u8 };
+            let le = want as u32;
             match self.read_binary_chunk(offset + out.len(), le) {
                 Ok(chunk) if chunk.is_empty() => break,
                 Ok(chunk) => out.extend_from_slice(&chunk),
@@ -278,7 +290,7 @@ impl<T: Transmit> Card<T> {
     /// filler bytes past the end of the object are not returned. Otherwise the file is read in
     /// chunks until the card signals the end.
     pub fn read_binary_all(&mut self) -> Result<Vec<u8>> {
-        let mut out = match self.read_binary_chunk(0, 0) {
+        let mut out = match self.read_binary_chunk(0, MAX_CHUNK as u32) {
             Ok(head) => head,
             Err(Error::Status(sw)) if is_end_of_file(sw) => return Ok(Vec::new()),
             Err(err) => return Err(err),
@@ -298,7 +310,7 @@ impl<T: Transmit> Card<T> {
             // Not a TLV file: keep reading until the card stops giving us bytes.
             Err(_) => {
                 while out.len() <= MAX_OFFSET {
-                    match self.read_binary_chunk(out.len(), 0) {
+                    match self.read_binary_chunk(out.len(), MAX_CHUNK as u32) {
                         Ok(chunk) if chunk.is_empty() => break,
                         Ok(chunk) => {
                             let short = chunk.len() < MAX_CHUNK;
@@ -328,7 +340,7 @@ impl<T: Transmit> Card<T> {
     pub fn read_binary_physical(&mut self) -> Result<Vec<u8>> {
         let mut out = Vec::new();
         while out.len() <= MAX_OFFSET {
-            match self.read_binary_chunk(out.len(), 0) {
+            match self.read_binary_chunk(out.len(), MAX_CHUNK as u32) {
                 Ok(chunk) if chunk.is_empty() => break,
                 Ok(chunk) => {
                     let short = chunk.len() < MAX_CHUNK;
@@ -360,7 +372,7 @@ impl<T: Transmit> Card<T> {
             ins::READ_RECORD,
             record,
             0x04,
-            0x00,
+            256,
         ))
     }
 
@@ -382,8 +394,57 @@ impl<T: Transmit> Card<T> {
             ins::READ_RECORD,
             first,
             0x05,
-            0x00,
+            256,
         ))
+    }
+
+    /// The card's contact interface ATR, complete and checked.
+    ///
+    /// A contactless reader synthesises an ATR of its own, so this is the only way to see the real
+    /// one over that interface. The card stores it without the initial `TS`, which is always `3B`
+    /// for direct convention; this prepends it and verifies `TCK`, the exclusive-or of everything
+    /// after `TS`.
+    ///
+    /// Which state answers varies between cards: some return it with the master file current and
+    /// some only with an application selected, so try it in both if the first answers 6A88.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Malformed`] if the checksum does not match, which would mean the bytes are not an
+    /// ATR at all.
+    pub fn contact_atr(&mut self) -> Result<Vec<u8>> {
+        let stored = self.get_data(0x5F51)?;
+        let (tck, body) = stored
+            .split_last()
+            .ok_or_else(|| Error::Malformed("contact ATR is empty".into()))?;
+        let computed = body.iter().fold(0u8, |acc, b| acc ^ b);
+        if computed != *tck {
+            return Err(Error::Malformed(format!(
+                "contact ATR checksum is {tck:02X}, computed {computed:02X}"
+            )));
+        }
+        Ok([&[0x3B][..], &stored].concat())
+    }
+
+    /// GET DATA — retrieve the data object named by `tag`, which goes in P1-P2.
+    ///
+    /// Not a JICSAP command. The card implements it anyway, and with no DF selected it is the
+    /// only route to a set of objects that no EF holds; see [`crate::mf::MasterFile`].
+    ///
+    /// Objects here range from one byte to several hundred, and the card refuses a short `Le` for
+    /// the large ones rather than reporting the right length, so a 6700 is retried with an
+    /// extended `Le`. That costs one extra APDU on the large objects and none on the rest.
+    pub fn get_data(&mut self, tag: u16) -> Result<Vec<u8>> {
+        let [p1, p2] = tag.to_be_bytes();
+        let short = Command::with_le(cla::USER, ins::GET_DATA, p1, p2, 256);
+        match self.call(&short)? {
+            response if response.status.is_success() => Ok(response.data),
+            response if response.status.value() == 0x6700 => {
+                let extended = Command::with_le(cla::USER, ins::GET_DATA, p1, p2, 65536);
+                self.call_ok(&extended)
+            }
+            response => Err(Error::from_status(response.status)),
+        }
     }
 
     /// VERIFY the currently selected internal EF against `pin`.
@@ -531,7 +592,7 @@ mod tests {
     fn reads_by_short_ef_id_without_selecting_first() {
         let mut card = Card::new(MockTransport::new([ok(&[0xAA])]));
         let sfi = ShortEfId::from_ef_id(0x000A).unwrap();
-        card.read_binary_chunk_sfi(sfi, 0x00, 0x00).unwrap();
+        card.read_binary_chunk_sfi(sfi, 0x00, 256).unwrap();
         // P1 = 1000_1010: short EF identifier 0x0A; P2 is an 8 bit offset.
         assert_eq!(card.transport().sent[0], [0x00, 0xB0, 0x8A, 0x00, 0x00]);
     }
@@ -551,7 +612,7 @@ mod tests {
     #[test]
     fn retries_with_the_length_the_card_asks_for() {
         let mut card = Card::new(MockTransport::new([vec![0x6C, 0x04], ok(&[1, 2, 3, 4])]));
-        let data = card.read_binary_chunk(0, 0).unwrap();
+        let data = card.read_binary_chunk(0, 256).unwrap();
         assert_eq!(data, [1, 2, 3, 4]);
         assert_eq!(card.transport().sent[0], [0x00, 0xB0, 0x00, 0x00, 0x00]);
         assert_eq!(card.transport().sent[1], [0x00, 0xB0, 0x00, 0x00, 0x04]);
@@ -564,7 +625,7 @@ mod tests {
             ok(&[0xBB, 0xCC]),
         ]));
         let data = card
-            .call_ok(&Command::with_le(0x00, 0xB0, 0x00, 0x00, 0x00))
+            .call_ok(&Command::with_le(0x00, 0xB0, 0x00, 0x00, 256))
             .unwrap();
         assert_eq!(data, [0xAA, 0xBB, 0xCC]);
         assert_eq!(card.transport().sent[1], [0x00, 0xC0, 0x00, 0x00, 0x02]);
@@ -670,6 +731,22 @@ mod tests {
                 Error::PinBlocked
             ));
         }
+    }
+
+    #[test]
+    fn the_contact_atr_gets_its_ts_back_and_is_checked() {
+        let stored = [0xE0, 0x00, 0xFF, 0x81, 0x31, 0xFE, 0x45, 0x14];
+        let mut card = Card::new(MockTransport::new([[&stored[..], &[0x90, 0x00]].concat()]));
+        assert_eq!(
+            card.contact_atr().unwrap(),
+            [0x3B, 0xE0, 0x00, 0xFF, 0x81, 0x31, 0xFE, 0x45, 0x14]
+        );
+
+        // One bit off and the checksum no longer matches.
+        let mut bad = stored;
+        bad[1] ^= 0x01;
+        let mut card = Card::new(MockTransport::new([[&bad[..], &[0x90, 0x00]].concat()]));
+        assert!(matches!(card.contact_atr(), Err(Error::Malformed(_))));
     }
 
     #[test]

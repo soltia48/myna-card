@@ -215,7 +215,7 @@ impl<'a, T: Transmit> JpkiAp<'a, T> {
         // that answers 61xx instead is handled by `Card::call`.
         let p2 = 0x80 | ShortEfId::from_ef_id(key)?.value();
         let command =
-            Command::with_data_le(0x80, ins::COMPUTE_SIGNATURE, scheme.p1(), p2, data, 0x00);
+            Command::with_data_le(0x80, ins::COMPUTE_SIGNATURE, scheme.p1(), p2, data, 256);
         self.card.call_ok(&command)
     }
 }

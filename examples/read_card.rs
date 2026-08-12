@@ -18,6 +18,8 @@
 use std::collections::HashMap;
 
 use myna_card::ap::{common::CommonAp, jpki::JpkiAp, surface::SurfaceAp, text::TextAp};
+use myna_card::data::CardVerifiableCertificate;
+use myna_card::mf::{self, MasterFile};
 use myna_card::{Pin, Retries, transport::pcsc};
 
 /// The printable part of a 16 byte key identifier: seven digits, then the three digit group.
@@ -48,9 +50,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut card = pcsc::connect_any()?;
 
-    println!("== 共通カードAP ==");
+    // The master file level answers only while no application is selected, so it goes first — and
+    // a power cycle is what puts the card back in that state.
+    println!("== master file ==");
+    {
+        card.transport_mut().power_cycle()?;
+        let mut mf = MasterFile::new(&mut card);
+        println!(
+            "  card number  {}",
+            String::from_utf8_lossy(&mf.data_object(mf::tag::CARD_IDENTIFICATION)?)
+                .trim_matches(|c: char| !c.is_ascii_graphic())
+                .to_owned()
+        );
+        let chain = mf.certificate_chain()?;
+        for (index, cert) in chain.iter().enumerate() {
+            println!(
+                "  chain[{index}]     {} -> {}",
+                key_id(&cert.issuer_key_id),
+                key_id(&cert.subject_key_id)
+            );
+        }
+        // Only the root needs a key from the table; the rest chain off it.
+        println!(
+            "  chain        [{}]",
+            outcome(CardVerifiableCertificate::verify_chain(&chain))
+        );
+    }
+
+    println!("\n== 共通カードAP ==");
     {
         let mut common = CommonAp::select(&mut card)?;
+        // Answers here on some cards and at the master file level on others.
+        let atr = common.card().contact_atr()?;
+        println!(
+            "  contact ATR  {}",
+            atr.iter()
+                .map(|b| format!("{b:02X}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
         let info = common.read_card_info()?;
         println!("  serial       {}", info.serial);
         println!(

@@ -26,8 +26,9 @@ pub mod ef {
     /// The card face: date of birth, sex, expiry, the rendered fields and the photograph.
     /// Unlocked by either 照合番号.
     pub const CARD_FACE: u16 = 0x0002;
-    /// Purpose not yet identified.
-    pub const UNKNOWN_0003: u16 = 0x0003;
+    /// This application's basic information: an identifier, the key it names, the municipality
+    /// code, and the 照合番号 in encrypted form.
+    pub const AP_BASIC_DATA: u16 = 0x0003;
     /// This application's own card-verifiable certificate.
     pub const CERTIFICATE: u16 = 0x0004;
     /// The rendered 個人番号, with its public key and a signature. Unlocked by 照合番号A only.
@@ -191,9 +192,9 @@ pub struct CardFace {
     pub signature: Vec<u8>,
     /// Expiry date. Note that this sits *after* the signature and is not covered by it.
     pub expiry: Date,
-    /// A further 1-bit image whose purpose is not identified. 24×12 on the card surveyed. Also
+    /// The security code printed on the card face, rendered. 24×12 on the card surveyed. Also
     /// after the signature, and also not covered by it.
-    pub unidentified_image: Image,
+    pub security_code_image: Image,
     /// The three groups the signature covers, each hashed separately. See [`CardFace::verify`].
     pub signed_segments: [Vec<u8>; 3],
 }
@@ -220,7 +221,7 @@ impl CardFace {
             photo: Image::new(f.get(0xDF27)?.to_vec()),
             signature: f.get(0xDF28)?.to_vec(),
             expiry: Date::parse(f.get(0xDF29)?)?,
-            unidentified_image: Image::new(f.get(0xDF2A)?.to_vec()),
+            security_code_image: Image::new(f.get(0xDF2A)?.to_vec()),
             signed_segments: [
                 f.bytes_of(&[0xDF22, 0xDF23, 0xDF24])?,
                 f.bytes_of(&[0xDF25, 0xDF26])?,
