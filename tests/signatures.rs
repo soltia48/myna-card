@@ -244,3 +244,20 @@ fn the_ap_basic_data_carries_the_municipality_and_an_encrypted_reference_number(
     );
     assert_eq!(basic.encrypted_reference_number.data.len(), 256);
 }
+
+#[test]
+fn filler_past_the_end_of_a_file_does_not_move_the_offsets() {
+    // A file read straight off the card carries filler; `read_binary_all` trims it, but a dump
+    // does not. The offset table is absolute, so a parser that measures the header by subtracting
+    // the value length from the file length gets every offset wrong by the amount of filler.
+    let trimmed = fixture("surface-0002.bin");
+    let padded = [trimmed.clone(), vec![0xFF; 512]].concat();
+    assert_eq!(
+        CardFace::parse(&padded).unwrap(),
+        CardFace::parse(&trimmed).unwrap()
+    );
+    CardFace::parse(&padded)
+        .unwrap()
+        .verify(&issuer_key())
+        .expect("still verifies");
+}

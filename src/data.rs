@@ -544,7 +544,10 @@ impl<'a> TlvFields<'a> {
                 outer.tag
             )));
         }
-        let mut pos = raw.len() - outer.value.len();
+        // The header's own length, not `raw.len() - value.len()`: a file read straight off the
+        // card carries filler past the end of the object, and taking the difference would push
+        // every offset out by however much filler there is.
+        let mut pos = ber::parse_header(raw)?.header_len;
         let mut rest = outer.value;
         let mut offsets = None;
         let mut items = Vec::new();
