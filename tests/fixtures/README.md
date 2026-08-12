@@ -16,6 +16,26 @@ actually returns rather than against something hand-built to match the parser.
 | `jpki-auth-cert.der` | `000A`, 利用者証明用証明書 | nothing |
 | `jpki-auth-ca-cert.der` | `000B`, its CA certificate | nothing |
 | `jpki-sign-cert.der` | `0001`, 署名用証明書 | the 署名用パスワード |
+| `jpki-sign-ca-cert.der` | `0002`, its CA certificate | nothing |
+
+Two more, from a second JPKI test card issued in 2021, are here for one reason: they carry the
+**same distinguished names** as the pair above and different keys, so a lookup that stops at the
+name picks the wrong one.
+
+| File | What it is |
+|---|---|
+| `jpki-auth-ca-cert-2019.der` | 利用者証明用CA of the other card, serial `00BFCD` |
+| `jpki-sign-ca-cert-2019.der` | 署名用CA of the other card, serial `00C139` |
+
+All four CA certificates are also carried as trust anchors in [`certs/test/`](../../certs/test/).
+These copies are the record of what the EFs returned; those are what the crate embeds. A test
+asserts they are the same bytes.
+
+Both CA certificates are self-signed roots of the `O=JPKI-TEST` hierarchy, and each verifies its
+own leaf and not the other's. Neither is one of the roots in [`certs/`](../../certs/) — J-LIS
+publishes none for the test hierarchy — which is what makes them useful here: they are exactly the
+case where a chain checks out against an anchor that came off the card being checked, and still
+proves nothing.
 
 | File | 券面入力補助AP EF | Read with |
 |---|---|---|

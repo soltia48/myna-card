@@ -99,6 +99,21 @@ SignatureScheme::Sha256DigestInfo
 Turn the feature off with `default-features = false` if you would rather check signatures
 elsewhere; the RSA and X.509 dependencies go with it.
 
+#### JPKI certificates and their roots
+
+`Certificate::verify_chain` checks the pair the card hands over, EF `000A` then EF `000B`. Both
+came off the same card, so that is an internal consistency check and nothing more.
+`Certificate::verify_to_root` ends at a root the crate carries instead, compiled in from
+[`certs/`](certs/) rather than read at run time: six published by J-LIS, three generations for each
+of the two certificate types.
+
+Four test hierarchy roots are carried as well, and reaching them takes asking. Both entry points
+take an `Accept`, and `Accept::ProductionOnly` — the setting for any program that verifies real
+cardholders — never returns one. A test card is not a person's Individual Number Card.
+
+Note that a distinguished name does not identify a root: all three generations share one. The
+lookup narrows by name and decides by signature.
+
 #### Card-verifiable certificates
 
 `CardVerifiableCertificate::verify()` resolves the CA key from the certificate's 証明者鍵ID using
@@ -166,9 +181,9 @@ every attempt after that. A key with no retry limit answers `6300` and never rep
 
 ## Not implemented yet
 
-- Revocation. `Certificate::verify_chain` checks signatures, the subject/issuer links and the
-  validity dates, but JPKI publishes revocation as a separate online service and nothing here
-  consults it. Basic constraints and key usage are not checked either.
+- Revocation. Chains are checked against published roots, but JPKI publishes revocation as a
+  separate online service and nothing here consults it. Basic constraints and key usage are not
+  checked either.
 - The files that stay unidentified: 公的個人認証AP `0008` and `0009`, 券面事項確認AP `0006` and
   券面入力補助AP `0008` — both sixteen `FF` bytes — and the trailing 128 bytes of 券面入力補助AP
   `0005`.

@@ -109,6 +109,191 @@ impl Certificate {
     }
 }
 
+/// The JPKI root certificates, as published by J-LIS.
+///
+/// The card carries a CA certificate of its own, in 公的個人認証AP `0002` and `000B`, and checking
+/// a card's certificate against it proves nothing: both came off the same card. These did not.
+/// They are the trust anchors that make the check mean something, and they are compiled in rather
+/// than read from disk so that nothing can substitute one at run time.
+///
+/// # Provenance
+///
+/// Downloaded from <https://www.jpki.go.jp/ca/index.html> and committed to `certs/` exactly as
+/// received. Each is self-signed, RSA-2048 and `sha256WithRSAEncryption`; the tests check the
+/// self-signatures with this crate's own verifier rather than taking that on trust.
+///
+/// # Generations
+///
+/// There are three of each, and a card is issued under whichever was current. The first pair
+/// expired on 2025-10-19 and is kept because certificates issued before then still have to be
+/// checkable — [`Certificate::verify_chain`] takes the date as an argument for exactly this
+/// reason.
+///
+/// The 券面 applications' trust anchors are a different set entirely; see [`crate::ca`].
+pub mod roots {
+    use super::Certificate;
+    use crate::error::Result;
+
+    /// Which hierarchy a root belongs to.
+    ///
+    /// The distinction is not cosmetic. A test hierarchy root will happily certify a test card,
+    /// and a test card is not a person's Individual Number Card — so anything deciding whether to
+    /// believe a real cardholder must not accept one.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    pub enum Hierarchy {
+        /// `O=JPKI`, issued to the public. Published by J-LIS.
+        Production,
+        /// `O=JPKI-TEST`. J-LIS publishes no root for it; these were read off test cards.
+        Test,
+    }
+
+    /// Which roots a lookup is allowed to return.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    pub enum Accept {
+        /// The only setting that belongs in a program that verifies real cardholders.
+        ProductionOnly,
+        /// Also accept the test hierarchy — for exercising a test card, and nothing else.
+        ProductionAndTest,
+    }
+
+    impl Accept {
+        fn allows(self, hierarchy: Hierarchy) -> bool {
+            self == Accept::ProductionAndTest || hierarchy == Hierarchy::Production
+        }
+    }
+
+    /// Which certificate on the card a root is for.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    pub enum Purpose {
+        /// 利用者証明用証明書 — 公的個人認証AP `000A`.
+        UserAuthentication,
+        /// 署名用証明書 — 公的個人認証AP `0001`.
+        DigitalSignature,
+    }
+
+    /// One root.
+    #[derive(Debug, Clone, Copy)]
+    pub struct Root {
+        /// Which certificate it issues.
+        pub purpose: Purpose,
+        /// Which hierarchy it anchors.
+        pub hierarchy: Hierarchy,
+        /// The number J-LIS gives it, taken from the published file name — `authca01` is 1.
+        ///
+        /// `None` for the test hierarchy. J-LIS publishes no list for `O=JPKI-TEST`, so how many
+        /// there are, and where the ones here sit among them, is not known. Tell those apart by
+        /// serial number or validity instead.
+        pub generation: Option<u8>,
+        /// The certificate, DER.
+        pub der: &'static [u8],
+    }
+
+    impl Root {
+        /// Parse it.
+        pub fn certificate(&self) -> Result<Certificate> {
+            Certificate::parse(self.der)
+        }
+    }
+
+    /// Every root this crate carries: the six J-LIS publishes, then the test hierarchy.
+    ///
+    /// The three generations of a production root share one distinguished name, and so do the two
+    /// test roots. A name does not identify a certificate here — only the signature does.
+    ///
+    /// The production entries are in J-LIS's order. The test entries are in no meaningful order:
+    /// they are simply the two that were read off cards.
+    pub const KNOWN: &[Root] = &[
+        Root {
+            purpose: Purpose::UserAuthentication,
+            hierarchy: Hierarchy::Production,
+            generation: Some(1),
+            der: include_bytes!("../certs/authca01.cer"),
+        },
+        Root {
+            purpose: Purpose::UserAuthentication,
+            hierarchy: Hierarchy::Production,
+            generation: Some(2),
+            der: include_bytes!("../certs/authca02.cer"),
+        },
+        Root {
+            purpose: Purpose::UserAuthentication,
+            hierarchy: Hierarchy::Production,
+            generation: Some(3),
+            der: include_bytes!("../certs/authca03.cer"),
+        },
+        Root {
+            purpose: Purpose::DigitalSignature,
+            hierarchy: Hierarchy::Production,
+            generation: Some(1),
+            der: include_bytes!("../certs/signca01.cer"),
+        },
+        Root {
+            purpose: Purpose::DigitalSignature,
+            hierarchy: Hierarchy::Production,
+            generation: Some(2),
+            der: include_bytes!("../certs/signca02.cer"),
+        },
+        Root {
+            purpose: Purpose::DigitalSignature,
+            hierarchy: Hierarchy::Production,
+            generation: Some(3),
+            der: include_bytes!("../certs/signca03.cer"),
+        },
+        Root {
+            purpose: Purpose::UserAuthentication,
+            hierarchy: Hierarchy::Test,
+            generation: None,
+            der: include_bytes!("../certs/test/authca-test-2019.cer"),
+        },
+        Root {
+            purpose: Purpose::UserAuthentication,
+            hierarchy: Hierarchy::Test,
+            generation: None,
+            der: include_bytes!("../certs/test/authca-test-2023.cer"),
+        },
+        Root {
+            purpose: Purpose::DigitalSignature,
+            hierarchy: Hierarchy::Test,
+            generation: None,
+            der: include_bytes!("../certs/test/signca-test-2019.cer"),
+        },
+        Root {
+            purpose: Purpose::DigitalSignature,
+            hierarchy: Hierarchy::Test,
+            generation: None,
+            der: include_bytes!("../certs/test/signca-test-2024.cer"),
+        },
+    ];
+
+    /// The root that issued `cert`, found by name and confirmed by signature.
+    ///
+    /// The name narrows the search and the signature decides it — which is not a nicety. Three
+    /// generations of production root share one distinguished name, and so do the test roots, so a
+    /// lookup that stopped at the name would pick the wrong certificate about as often as the
+    /// right one.
+    ///
+    /// `accept` decides whether the test hierarchy counts. Use [`Accept::ProductionOnly`] anywhere
+    /// the answer decides whether to believe a real cardholder; a test card is not one.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::SignatureInvalid`] if no permitted root signed it. There is no X.509
+    /// counterpart to [`crate::Error::UnknownCertificateAuthority`], so "nothing was checked" and
+    /// "the check failed" arrive as the same variant here; the message distinguishes them.
+    pub fn issuer_of(cert: &Certificate, accept: Accept) -> Result<Certificate> {
+        let issuer = cert.issuer();
+        for root in KNOWN.iter().filter(|r| accept.allows(r.hierarchy)) {
+            let candidate = root.certificate()?;
+            if candidate.subject() == issuer && cert.verify_signature(&candidate).is_ok() {
+                return Ok(candidate);
+            }
+        }
+        Err(crate::Error::SignatureInvalid(
+            "no root this crate carries signed this certificate",
+        ))
+    }
+}
+
 impl std::fmt::Debug for Certificate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let (from, to) = self.validity();
@@ -123,6 +308,22 @@ impl std::fmt::Debug for Certificate {
 
 #[cfg(feature = "verify")]
 impl Certificate {
+    /// Check this certificate up to a root J-LIS publishes, on `on`.
+    ///
+    /// The difference from [`verify_chain`](Self::verify_chain) is where the anchor comes from.
+    /// That one ends at whatever the caller passed last, which for a card is the CA certificate in
+    /// EF `0002` or `000B` — the same card, so the chain proves only that the card is internally
+    /// consistent. This one ends at [`roots`], which came from J-LIS.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::SignatureInvalid`] if no permitted root signed it, and
+    /// [`crate::Error::Malformed`] if either certificate is outside its validity on `on`.
+    pub fn verify_to_root(&self, on: Date, accept: roots::Accept) -> Result<()> {
+        let root = roots::issuer_of(self, accept)?;
+        Certificate::verify_chain(&[self.clone(), root], on)
+    }
+
     /// Check a chain, **leaf first**, as the card hands it over: EF `000A` then EF `000B`.
     ///
     /// Note the direction. [`CardVerifiableCertificate::verify_chain`](crate::data::CardVerifiableCertificate::verify_chain) takes its chain root first,
