@@ -1,0 +1,215 @@
+//! Signature checks against files read from a real card.
+//!
+//! Everything here uses `tests/fixtures`, which came off a JPKI test card. Hand-built data would
+//! only prove the parser agrees with itself; these prove it agrees with the card.
+
+#![cfg(feature = "verify")]
+
+use myna_card::ap::surface::{AgeRecord, CardFace, MyNumberImage};
+use myna_card::data::{CardVerifiableCertificate, ImageFormat, RsaPublicKey, Sex};
+
+fn fixture(name: &str) -> Vec<u8> {
+    std::fs::read(format!(
+        "{}/tests/fixtures/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .unwrap_or_else(|e| panic!("reading {name}: {e}"))
+}
+
+/// A fixture, wrapped back in the `7F21` template if it was stored without one.
+///
+/// GET DATA returns the template's contents rather than the template, so the MF level
+/// certificates are on disk as bare bodies while the ones read out of an EF are complete.
+fn wrapped(name: &str) -> Vec<u8> {
+    let bytes = fixture(name);
+    if bytes.starts_with(&[0x7F, 0x21]) {
+        return bytes;
+    }
+    let len = bytes.len();
+    [vec![0x7F, 0x21, 0x82, (len >> 8) as u8, len as u8], bytes].concat()
+}
+
+/// The key that signs this application's data: the subject of the certificate in EF `0004`.
+///
+/// Not the card's own key — that one lives inside each record and signs challenges instead.
+fn issuer_key() -> RsaPublicKey {
+    CardVerifiableCertificate::parse(&fixture("surface-0004.bin"))
+        .unwrap()
+        .public_key
+}
+
+#[test]
+fn the_certificate_carries_a_2048_bit_key() {
+    let cert = CardVerifiableCertificate::parse(&fixture("surface-0004.bin")).unwrap();
+    assert_eq!(cert.issuer_key_id, b"6000023\x08\x05001\0\0\0\0");
+    assert_eq!(cert.subject_key_id, b"1322121\x08\x05000\0\0\0\0");
+    assert_eq!(cert.signed_data.len(), 297);
+    assert_eq!(cert.public_key.bits(), 2048);
+    assert_eq!(cert.public_key.exponent, [0x01, 0x00, 0x01]);
+    assert_eq!(cert.signature.len(), 256);
+}
+
+#[test]
+fn the_age_record_verifies() {
+    let record = AgeRecord::parse(&fixture("surface-0001.bin")).unwrap();
+    assert_eq!(record.birth_date.to_string(), "1980-02-17");
+    record.verify(&issuer_key()).expect("age record signature");
+}
+
+#[test]
+fn the_my_number_image_verifies() {
+    let record = MyNumberImage::parse(&fixture("surface-0005.bin")).unwrap();
+    assert_eq!(record.image.format, ImageFormat::Png);
+    record
+        .verify(&issuer_key())
+        .expect("my number image signature");
+}
+
+#[test]
+fn the_card_face_verifies_across_its_three_segments() {
+    let face = CardFace::parse(&fixture("surface-0002.bin")).unwrap();
+    assert_eq!(face.birth_date.to_string(), "1980-02-17");
+    assert_eq!(face.expiry.to_string(), "2035-02-17");
+    assert_eq!(face.sex, Sex::Male);
+    assert_eq!(face.photo.format, ImageFormat::Jpeg2000);
+    face.verify(&issuer_key()).expect("card face signature");
+}
+
+#[test]
+fn all_three_records_carry_the_same_card_key() {
+    let age = AgeRecord::parse(&fixture("surface-0001.bin")).unwrap();
+    let face = CardFace::parse(&fixture("surface-0002.bin")).unwrap();
+    let image = MyNumberImage::parse(&fixture("surface-0005.bin")).unwrap();
+    assert_eq!(age.public_key, face.public_key);
+    assert_eq!(face.public_key, image.public_key);
+    // And it is not the key that signed them.
+    assert_ne!(age.public_key, issuer_key());
+}
+
+#[test]
+fn a_tampered_record_does_not_verify() {
+    let issuer = issuer_key();
+
+    // Flip a bit in the signature.
+    let mut record = AgeRecord::parse(&fixture("surface-0001.bin")).unwrap();
+    record.signature[200] ^= 0x01;
+    assert!(record.verify(&issuer).is_err());
+
+    // Flip a bit in the data instead.
+    let mut record = AgeRecord::parse(&fixture("surface-0001.bin")).unwrap();
+    record.signed_data[10] ^= 0x01;
+    assert!(record.verify(&issuer).is_err());
+
+    // Change the photograph, which lives in the third signed segment of the card face.
+    let mut face = CardFace::parse(&fixture("surface-0002.bin")).unwrap();
+    let last = face.signed_segments[2].len() - 1;
+    face.signed_segments[2][last] ^= 0x01;
+    assert!(face.verify(&issuer).is_err());
+
+    // And the first segment, which holds the card's public key.
+    let mut face = CardFace::parse(&fixture("surface-0002.bin")).unwrap();
+    face.signed_segments[0][0] ^= 0x01;
+    assert!(face.verify(&issuer).is_err());
+}
+
+#[test]
+fn the_card_key_does_not_verify_the_data_signatures() {
+    // A plausible mistake, since every record carries the card's key right next to the signature.
+    let record = AgeRecord::parse(&fixture("surface-0001.bin")).unwrap();
+    assert!(record.verify(&record.public_key).is_err());
+}
+
+/// Card-verifiable certificates are signed by a CA key that is deliberately *not* on the card. The
+/// test hierarchy keys are now in [`myna_card::ca`], recovered from pairs of certificates, so the
+/// real ones can be checked end to end; a synthetic certificate signed with a key generated here
+/// covers the tampering cases, where a real signature cannot be produced.
+mod card_verifiable_certificates {
+    use super::{fixture, wrapped};
+    use myna_card::data::{CardVerifiableCertificate, RsaPublicKey};
+
+    fn synthetic() -> (CardVerifiableCertificate, RsaPublicKey) {
+        let cert =
+            CardVerifiableCertificate::parse(&fixture("cv-certificate-synthetic.bin")).unwrap();
+        let ca = RsaPublicKey::parse(&fixture("cv-ca-key-synthetic.bin")).unwrap();
+        (cert, ca)
+    }
+
+    #[test]
+    fn a_certificate_verifies_under_its_ca_key() {
+        let (cert, ca) = synthetic();
+        assert_eq!(cert.issuer_key_id, b"5000023\x08\x05001\0\0\0\0");
+        assert_eq!(cert.signed_data.len(), CardVerifiableCertificate::BODY_LEN);
+        cert.verify_with(&ca).expect("certificate signature");
+    }
+
+    #[test]
+    fn a_tampered_certificate_does_not() {
+        let (mut cert, ca) = synthetic();
+        // The signature covers the key identifiers as well as the key, so changing either breaks it.
+        cert.signed_data[0] ^= 0x01;
+        assert!(cert.verify_with(&ca).is_err());
+
+        let (mut cert, ca) = synthetic();
+        let n = cert.signed_data.len() - 1;
+        cert.signed_data[n] ^= 0x01;
+        assert!(cert.verify_with(&ca).is_err());
+
+        let (mut cert, ca) = synthetic();
+        cert.signature[100] ^= 0x01;
+        assert!(cert.verify_with(&ca).is_err());
+    }
+
+    #[test]
+    fn the_cards_own_certificates_verify_against_the_built_in_table() {
+        let (_, ca) = synthetic();
+        for name in ["surface-0004.bin", "text-0004.bin", "mf-do-F8.bin"] {
+            let cert = CardVerifiableCertificate::parse(&wrapped(name)).unwrap();
+            // A test hierarchy: the production identifiers begin "5000".
+            assert!(
+                cert.issuer_key_id.starts_with(b"6000"),
+                "{:?}",
+                cert.issuer_key_id
+            );
+
+            cert.verify().unwrap();
+
+            // An explicit check against the wrong key still fails as a signature.
+            assert!(cert.verify_with(&ca).is_err());
+            // Emphatically not against the key the certificate itself carries.
+            assert!(cert.verify_with(&cert.public_key).is_err());
+        }
+    }
+
+    #[test]
+    fn an_unknown_authority_is_not_reported_as_a_bad_signature() {
+        // The intermediate that signs the second MF level certificate is not in the table — its
+        // key travels in the certificate above it instead. The lookup must say so, rather than
+        // claiming the signature is wrong: nothing was checked, and the two are not the same
+        // answer.
+        let cert = CardVerifiableCertificate::parse(&wrapped("mf-do-7F21.bin")).unwrap();
+        let err = cert.verify().unwrap_err();
+        assert!(
+            matches!(err, myna_card::Error::UnknownCertificateAuthority(_)),
+            "{err}"
+        );
+
+        // It does verify under the key carried by the certificate above it, closing the chain.
+        let above = CardVerifiableCertificate::parse(&wrapped("mf-do-F8.bin")).unwrap();
+        assert_eq!(cert.issuer_key_id, above.subject_key_id);
+        cert.verify_with(&above.public_key).unwrap();
+    }
+
+    #[test]
+    fn a_production_certificate_resolves_its_ca() {
+        // The synthetic certificate is issued under a production identifier, so the lookup finds
+        // a key — and then rejects it, because it was signed with a key generated here instead.
+        let (cert, _) = synthetic();
+        let named = myna_card::ca::find(&cert.issuer_key_id).expect("5000023 is in the table");
+        assert_eq!(named.name(), "5000023");
+        let err = cert.verify().unwrap_err();
+        assert!(
+            matches!(err, myna_card::Error::SignatureInvalid(_)),
+            "{err}"
+        );
+    }
+}

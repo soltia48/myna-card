@@ -1,0 +1,39 @@
+[package]
+name = "myna-card"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "A library for accessing the Japanese Individual Number Card (個人番号カード) over PC/SC"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/example/myna-card"
+keywords = ["smartcard", "pcsc", "iso7816", "mynumber", "jpki"]
+categories = ["api-bindings", "authentication"]
+
+[dependencies]
+pcsc = { version = "2.9", optional = true }
+rsa = { version = "0.9", optional = true }
+sha2 = { version = "0.10", optional = true }
+thiserror = "2"
+x509-cert = { version = "0.2", optional = true }
+
+[features]
+default = ["pcsc", "verify"]
+# The PC/SC backend. Disable to use the crate with a transport of your own.
+pcsc = ["dep:pcsc"]
+# Signature verification. Pulls in an RSA implementation and SHA-2; turn it off if you only need
+# to read the card and will check signatures elsewhere.
+verify = ["dep:rsa", "dep:sha2", "dep:x509-cert"]
+# Expose the in-memory test transport to downstream crates.
+mock = []
+
+[[example]]
+name = "list_readers"
+required-features = ["pcsc"]
+
+[[example]]
+name = "dump_certificates"
+required-features = ["pcsc"]
+
+[[example]]
+name = "read_card"
+required-features = ["pcsc"]
