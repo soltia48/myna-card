@@ -16,7 +16,7 @@
 //! Every 証明者鍵ID seen on any card examined resolves; the intermediates below them need no
 //! entry, since each one's key travels inside the certificate above it.
 
-use crate::data::RsaPublicKey;
+use crate::data::{KeyId, RsaPublicKey};
 
 /// A CA public key, with the 証明者鍵ID that names it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -228,8 +228,8 @@ pub const KNOWN: &[CaKey] = &[
 ///
 /// The identifier is compared in full, all 16 bytes, so a certificate from a different hierarchy
 /// does not match a production key by accident.
-pub fn find(key_id: &[u8]) -> Option<&'static CaKey> {
-    KNOWN.iter().find(|k| k.key_id.as_slice() == key_id)
+pub fn find(key_id: &KeyId) -> Option<&'static CaKey> {
+    KNOWN.iter().find(|k| k.key_id == key_id.as_bytes())
 }
 
 #[cfg(test)]
@@ -254,23 +254,30 @@ mod tests {
 
     #[test]
     fn lookup_matches_the_whole_identifier() {
-        let production = KNOWN[0].key_id;
-        assert!(find(production).is_some());
-        assert!(find(&production[..15]).is_none(), "a prefix must not match");
+        let bytes = *KNOWN[0].key_id;
+        let production = KeyId::parse(&bytes).unwrap();
+        assert!(find(&production).is_some());
 
         // The two hierarchies differ only in the first digit, so each must resolve to its own key
         // and never to the other's.
-        let mut other = *production;
+        let mut other = bytes;
         other[0] = b'6';
+        let other = KeyId::parse(&other).unwrap();
         assert_ne!(
             find(&other).map(|k| k.modulus),
-            find(production).map(|k| k.modulus)
+            find(&production).map(|k| k.modulus)
         );
 
         // An identifier that is in neither hierarchy resolves to nothing at all.
-        let mut absent = *production;
+        let mut absent = bytes;
         absent[0] = b'9';
-        assert!(find(&absent).is_none());
+        assert!(find(&KeyId::parse(&absent).unwrap()).is_none());
+
+        // And the padding counts: two identifiers that differ only there are different keys. The
+        // MF level entries really do carry a non-zero byte there, so this is not hypothetical.
+        let mut padded = bytes;
+        padded[15] ^= 0x01;
+        assert!(find(&KeyId::parse(&padded).unwrap()).is_none());
     }
 
     #[test]

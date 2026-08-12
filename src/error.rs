@@ -87,8 +87,8 @@ pub enum Error {
     /// A card-verifiable certificate names a CA this crate has no key for.
     ///
     /// Distinct from a failed signature: nothing was checked. See [`crate::ca`].
-    #[error("no CA key for 証明者鍵ID {0:?}")]
-    UnknownCertificateAuthority(String),
+    #[error("no CA key for 証明者鍵ID {0}")]
+    UnknownCertificateAuthority(crate::data::KeyId),
 
     /// A signature did not verify under the key it was checked against.
     #[error("signature verification failed: {0}")]

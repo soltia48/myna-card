@@ -272,6 +272,83 @@ impl RsaPublicKey {
     }
 }
 
+/// A 16 byte key identifier — 証明者鍵ID, 被証明者鍵ID, and the references the 券面 applications'
+/// basic information files carry.
+///
+/// ```text
+/// "6000024" 08 05 "001" 00 00 00 00
+///  ^^^^^^^ number      ^^^ group    ^^^^^^^^^^^ padding, whose last byte is not always zero
+/// ```
+///
+/// It names a *key*, not an issuer: the same organisation appears under several of these. The
+/// leading digit separates hierarchies — production identifiers begin `5`, the JPKI test
+/// hierarchy's begin `6`.
+///
+/// Comparison and lookup use all 16 bytes, so a certificate from one hierarchy never resolves to
+/// the other's key by accident.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct KeyId([u8; Self::LEN]);
+
+impl KeyId {
+    /// Length of the identifier.
+    pub const LEN: usize = 16;
+
+    /// Take the identifier from exactly 16 bytes.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Malformed`] if the slice is not 16 bytes long, or if the two digit groups are not
+    /// ASCII digits.
+    pub fn parse(bytes: &[u8]) -> Result<Self> {
+        let bytes: [u8; Self::LEN] = bytes.try_into().map_err(|_| {
+            malformed(&format!(
+                "key identifier must be 16 bytes, got {}",
+                bytes.len()
+            ))
+        })?;
+        if !bytes[..7].iter().all(u8::is_ascii_digit)
+            || !bytes[9..12].iter().all(u8::is_ascii_digit)
+        {
+            return Err(malformed("key identifier is not digits where it should be"));
+        }
+        Ok(KeyId(bytes))
+    }
+
+    /// The seven digit number that names the key.
+    pub fn number(&self) -> &str {
+        std::str::from_utf8(&self.0[..7]).unwrap_or("???????")
+    }
+
+    /// The three digit group that follows it.
+    pub fn group(&self) -> &str {
+        std::str::from_utf8(&self.0[9..12]).unwrap_or("???")
+    }
+
+    /// All 16 bytes.
+    pub fn as_bytes(&self) -> &[u8; Self::LEN] {
+        &self.0
+    }
+}
+
+impl fmt::Display for KeyId {
+    /// `6000024/001` — the two digit groups, which is what identifies the key to a reader.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}/{}", self.number(), self.group())
+    }
+}
+
+impl fmt::Debug for KeyId {
+    /// The printable form plus the padding, since that is where two identifiers can differ
+    /// invisibly.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "KeyId({self}")?;
+        for byte in &self.0[12..] {
+            write!(f, " {byte:02X}")?;
+        }
+        write!(f, ")")
+    }
+}
+
 /// A card-verifiable certificate, tag `7F21`.
 ///
 /// Both 券面 applications keep the card's own certificate in EF `0004` in this format, and
@@ -293,12 +370,9 @@ impl RsaPublicKey {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CardVerifiableCertificate {
     /// 証明者鍵ID — which key signed this certificate.
-    ///
-    /// 16 bytes: seven ASCII digits, `08 05`, three more ASCII digits, then three NUL bytes and
-    /// one byte that is not always zero.
-    pub issuer_key_id: Vec<u8>,
-    /// 被証明者鍵ID — which key is being certified, 16 bytes.
-    pub subject_key_id: Vec<u8>,
+    pub issuer_key_id: KeyId,
+    /// 被証明者鍵ID — which key is being certified.
+    pub subject_key_id: KeyId,
     /// The certified public key.
     pub public_key: RsaPublicKey,
     /// Signature over the body, tag `5F37`.
@@ -358,8 +432,8 @@ impl CardVerifiableCertificate {
         }
         let ids = 2 * Self::KEY_ID_LEN;
         Ok(CardVerifiableCertificate {
-            issuer_key_id: body[..Self::KEY_ID_LEN].to_vec(),
-            subject_key_id: body[Self::KEY_ID_LEN..ids].to_vec(),
+            issuer_key_id: KeyId::parse(&body[..Self::KEY_ID_LEN])?,
+            subject_key_id: KeyId::parse(&body[Self::KEY_ID_LEN..ids])?,
             public_key: RsaPublicKey::parse(&body[ids..])?,
             signature: signature
                 .ok_or_else(|| malformed("certificate has no signature (tag 5F37)"))?,
@@ -676,8 +750,8 @@ mod tests {
     #[test]
     fn parses_a_card_verifiable_certificate() {
         let parsed = CardVerifiableCertificate::parse(&cv_certificate()).unwrap();
-        assert_eq!(parsed.issuer_key_id, b"9200073\x08\x050010000");
-        assert_eq!(parsed.subject_key_id, b"9299774\x08\x050010000");
+        assert_eq!(parsed.issuer_key_id.to_string(), "9200073/001");
+        assert_eq!(parsed.subject_key_id.to_string(), "9299774/001");
         assert_eq!(parsed.public_key.bits(), 2048);
         assert_eq!(parsed.signature.len(), 256);
         // The signature covers the body, and only the body.
@@ -819,13 +893,8 @@ impl CardVerifiableCertificate {
     /// what a test card gets, since its certificates are issued under `"6000023"`/`"6000033"`.
     /// Nothing is checked in that case; it is not a signature failure.
     pub fn verify(&self) -> Result<()> {
-        let ca = crate::ca::find(&self.issuer_key_id).ok_or_else(|| {
-            Error::UnknownCertificateAuthority(
-                String::from_utf8_lossy(&self.issuer_key_id)
-                    .trim_end_matches('\0')
-                    .to_string(),
-            )
-        })?;
+        let ca = crate::ca::find(&self.issuer_key_id)
+            .ok_or(Error::UnknownCertificateAuthority(self.issuer_key_id))?;
         self.verify_with(&ca.to_public_key())
     }
 

@@ -426,6 +426,23 @@ impl<T: Transmit> Card<T> {
         Ok([&[0x3B][..], &stored].concat())
     }
 
+    /// GET CHALLENGE — sixteen random bytes from the card.
+    ///
+    /// The length is not a parameter because the card offers no choice: `Le` = 16 answers and
+    /// every other length is refused with 6985.
+    pub fn get_challenge(&mut self) -> Result<[u8; 16]> {
+        let data = self.call_ok(&Command::with_le(
+            cla::USER,
+            ins::GET_CHALLENGE,
+            0x00,
+            0x00,
+            16,
+        ))?;
+        data.try_into().map_err(|d: Vec<u8>| {
+            Error::Malformed(format!("challenge is {} bytes, not 16", d.len()))
+        })
+    }
+
     /// GET DATA — retrieve the data object named by `tag`, which goes in P1-P2.
     ///
     /// Not a JICSAP command. The card implements it anyway, and with no DF selected it is the

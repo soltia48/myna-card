@@ -10,7 +10,7 @@
 
 use crate::card::{Card, Retries};
 use crate::data::{
-    CardVerifiableCertificate, Date, MyNumber, RsaPublicKey, Sex, TlvFields, check_offsets,
+    CardVerifiableCertificate, Date, KeyId, MyNumber, RsaPublicKey, Sex, TlvFields, check_offsets,
     malformed,
 };
 use crate::error::Result;
@@ -95,6 +95,14 @@ impl<'a, T: Transmit> TextAp<'a, T> {
         CardVerifiableCertificate::parse(&raw)
     }
 
+    /// Read this application's basic information from EF `0005`.
+    ///
+    /// Readable with nothing presented.
+    pub fn read_ap_basic_data(&mut self) -> Result<ApBasicData> {
+        let raw = self.read_ef(ef::AP_BASIC_DATA)?;
+        ApBasicData::parse(&raw)
+    }
+
     /// Read the integrity record of EF `0003`.
     ///
     /// Requires the PIN or either 照合番号.
@@ -125,6 +133,28 @@ impl<'a, T: Transmit> TextAp<'a, T> {
     pub fn read_my_number_file(&mut self) -> Result<Vec<u8>> {
         self.card.select_ef(ef::MY_NUMBER)?;
         self.card.read_binary_physical()
+    }
+
+    /// Sign `data` with this application's own key — the one whose public half travels inside the
+    /// signed records, and which needs no credential.
+    ///
+    /// Hashing happens here: the card is handed a SHA-256 `DigestInfo`, and P2 is `00`, which
+    /// selects the application's default key. That is exactly what the issuer's own SDK sends.
+    ///
+    /// Signing a challenge and checking the result against the public key in a record is what
+    /// proves the card is present, as opposed to a copy of its files. The record has to be
+    /// verified too, or the key being challenged is one the attacker chose.
+    #[cfg(feature = "verify")]
+    pub fn sign(&mut self, data: &[u8]) -> Result<Vec<u8>> {
+        let digest_info = crate::data::sha256_digest_info(&crate::data::sha256(data));
+        self.card.call_ok(&crate::apdu::Command::with_data_le(
+            0x80,
+            crate::card::ins::COMPUTE_SIGNATURE,
+            0x00,
+            0x00,
+            digest_info,
+            256,
+        ))
     }
 
     /// Present the four digit PIN.
@@ -381,6 +411,56 @@ mod tests {
         ]));
         let mut text = TextAp::select(&mut card).unwrap();
         assert_eq!(text.read_attributes().unwrap().sex, Sex::Male);
+    }
+}
+
+/// This application's basic information, EF `0005`.
+///
+/// ```text
+/// FF 40
+///   DF 41 04     four bytes that identify the layout
+///   DF 42 10     a key identifier, but not the one that signs this application's records
+///   DF 43 80     128 bytes, not named by the issuer's own SDK
+/// ```
+///
+/// Readable with nothing presented, and nothing here is signed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApBasicData {
+    /// `DF41`, four bytes. `01 03 0E 01` on the cards seen.
+    pub identification: Vec<u8>,
+    /// `DF42` — a key identifier, which the issuer's SDK calls the public key identifier.
+    ///
+    /// It is **not** the key EF `0004` certifies: on the cards seen this is `x000034` while the
+    /// certificate's 被証明者鍵ID is the municipality's own. What it names is not established.
+    pub public_key_id: KeyId,
+    /// `DF43`, 128 bytes, purpose unknown.
+    ///
+    /// The issuer's own SDK parses `DF41` and `DF42` and ignores this one. On every card examined
+    /// it is 32 bytes followed by 96 `FF`, which is the shape of a digest in a padded field — see
+    /// [`digest`](Self::digest) — but nothing was found that it is a digest *of*.
+    pub trailing: Vec<u8>,
+}
+
+impl ApBasicData {
+    /// Tag of the file.
+    pub const TAG: u32 = 0xFF40;
+
+    /// The first 32 bytes of [`trailing`](Self::trailing), if the rest is `FF` filler.
+    ///
+    /// `None` when the field is shaped differently, rather than a guess about what it holds.
+    pub fn digest(&self) -> Option<&[u8]> {
+        let (head, filler) = self.trailing.split_at_checked(32)?;
+        filler.iter().all(|b| *b == 0xFF).then_some(head)
+    }
+
+    /// Parse EF `0005`.
+    pub fn parse(raw: &[u8]) -> Result<Self> {
+        let f = TlvFields::parse(raw, Self::TAG, None)?;
+        Ok(ApBasicData {
+            identification: f.get(0xDF41)?.to_vec(),
+            public_key_id: KeyId::parse(f.get(0xDF42)?)?,
+            trailing: f.get(0xDF43)?.to_vec(),
+        })
     }
 }
 

@@ -85,11 +85,15 @@ So verifying the record proves the data is authentic and that the key belongs to
 challenging the card proves the card is present:
 
 ```rust
-let issuer = surface.read_certificate()?.public_key;
+let cert = surface.read_certificate()?;
+cert.verify()?;                                               // the issuer key is certified
 let face = surface.read_card_face()?;
-face.verify(&issuer)?;                                        // the data is authentic
+face.verify(&cert.public_key)?;                               // the data is authentic
+
+let challenge = surface.card().get_challenge()?;
+let signature = surface.sign(&challenge)?;                    // the card's own key, no PIN
 SignatureScheme::Sha256DigestInfo
-    .verify(&face.public_key, challenge, &card_signature)?;   // the card is here
+    .verify(&face.public_key, &challenge, &signature)?;       // the card is here
 ```
 
 Turn the feature off with `default-features = false` if you would rather check signatures
@@ -100,6 +104,9 @@ elsewhere; the RSA and X.509 dependencies go with it.
 `CardVerifiableCertificate::verify()` resolves the CA key from the certificate's 証明者鍵ID using
 the table in `ca`, or take `verify_with()` to supply one yourself. `verify_chain()` walks a chain,
 resolving a key for the root only and checking each later link against the one above it.
+
+Identifiers are a `KeyId`, not loose bytes: `6000023/001` prints as such, and comparison uses all
+sixteen bytes, so a certificate from one hierarchy never resolves to another's key by accident.
 
 The table holds six keys: the three production 証明者鍵ID and the three matching ones of the test
 hierarchy JPKI test cards are issued under. Certificates from either verify without a key being
@@ -159,8 +166,9 @@ every attempt after that. A key with no retry limit answers `6300` and never rep
 
 ## Not implemented yet
 
-- Full certificate validation. `Certificate::verify_signature` checks one link against the issuer
-  you hand it; nothing walks a chain on its own, checks names or key usage, or consults revocation.
+- Revocation. `Certificate::verify_chain` checks signatures, the subject/issuer links and the
+  validity dates, but JPKI publishes revocation as a separate online service and nothing here
+  consults it. Basic constraints and key usage are not checked either.
 - The files that stay unidentified: 公的個人認証AP `0008` and `0009`, 券面事項確認AP `0006` and
   券面入力補助AP `0008` — both sixteen `FF` bytes — and the trailing 128 bytes of 券面入力補助AP
   `0005`.

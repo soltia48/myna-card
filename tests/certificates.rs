@@ -97,3 +97,28 @@ fn rubbish_is_rejected() {
     broken.truncate(100);
     assert!(Certificate::parse(&broken).is_err());
 }
+
+#[test]
+fn a_chain_checks_signatures_names_and_dates() {
+    let auth = Certificate::parse(&fixture("jpki-auth-cert.der")).unwrap();
+    let ca = Certificate::parse(&fixture("jpki-auth-ca-cert.der")).unwrap();
+    let chain = [auth.clone(), ca.clone()];
+
+    let (from, _) = auth.validity();
+    Certificate::verify_chain(&chain, from).expect("the chain the card hands over");
+
+    // Reversed, the names no longer meet.
+    assert!(Certificate::verify_chain(&[ca.clone(), auth.clone()], from).is_err());
+    assert!(Certificate::verify_chain(&[], from).is_err());
+
+    // A date outside the leaf's validity is rejected even though every signature is fine.
+    let (_, until) = auth.validity();
+    let day_after = Date {
+        year: until.year + 1,
+        ..until
+    };
+    assert!(Certificate::verify_chain(&chain, day_after).is_err());
+
+    // A single certificate is a chain: only its dates are checked, nothing is verified.
+    Certificate::verify_chain(&[auth], from).unwrap();
+}

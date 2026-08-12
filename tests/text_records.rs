@@ -3,7 +3,7 @@
 #![cfg(feature = "verify")]
 
 use myna_card::Certificate;
-use myna_card::ap::text::{IntegrityRecord, SessionKeyPublicKey, SignedPublicKey};
+use myna_card::ap::text::{ApBasicData, IntegrityRecord, SessionKeyPublicKey, SignedPublicKey};
 use myna_card::data::CardVerifiableCertificate;
 
 fn fixture(name: &str) -> Vec<u8> {
@@ -121,4 +121,20 @@ fn the_certificate_chain_links() {
     assert!(ee.verify_signature(&ee).is_err());
     let sign = Certificate::parse(&fixture("jpki-sign-cert.der")).unwrap();
     assert!(sign.verify_signature(&ca).is_err());
+}
+
+#[test]
+fn the_ap_basic_data_names_a_key_that_is_not_the_signing_key() {
+    let basic = ApBasicData::parse(&fixture("text-0005.bin")).unwrap();
+    assert_eq!(basic.identification, [0x01, 0x03, 0x0E, 0x01]);
+    assert_eq!(basic.public_key_id.to_string(), "6000034/001");
+
+    // Not the key EF 0004 certifies, which is what makes the name in the SDK misleading.
+    let cert =
+        myna_card::data::CardVerifiableCertificate::parse(&fixture("text-0004.bin")).unwrap();
+    assert_ne!(basic.public_key_id, cert.subject_key_id);
+
+    // 32 bytes then filler, on every card seen.
+    assert_eq!(basic.trailing.len(), 128);
+    assert_eq!(basic.digest().unwrap().len(), 32);
 }

@@ -17,19 +17,12 @@
 
 use std::collections::HashMap;
 
+use myna_card::Certificate;
+use myna_card::ap::jpki::SignatureScheme;
 use myna_card::ap::{common::CommonAp, jpki::JpkiAp, surface::SurfaceAp, text::TextAp};
 use myna_card::data::CardVerifiableCertificate;
 use myna_card::mf::{self, MasterFile};
 use myna_card::{Pin, Retries, transport::pcsc};
-
-/// The printable part of a 16 byte key identifier: seven digits, then the three digit group.
-fn key_id(id: &[u8]) -> String {
-    format!(
-        "{}/{}",
-        String::from_utf8_lossy(&id[..7]),
-        String::from_utf8_lossy(&id[9..12])
-    )
-}
 
 /// Render a check as a short tag, so a failure is visible without stopping the run.
 fn outcome(result: Result<(), myna_card::Error>) -> String {
@@ -66,8 +59,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for (index, cert) in chain.iter().enumerate() {
             println!(
                 "  chain[{index}]     {} -> {}",
-                key_id(&cert.issuer_key_id),
-                key_id(&cert.subject_key_id)
+                cert.issuer_key_id, cert.subject_key_id
             );
         }
         // Only the root needs a key from the table; the rest chain off it.
@@ -105,8 +97,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let cert = text.read_certificate()?;
         println!(
             "  certificate  被証明者鍵ID {}, issued under {}  [{}]",
-            key_id(&cert.subject_key_id),
-            key_id(&cert.issuer_key_id),
+            cert.subject_key_id,
+            cert.issuer_key_id,
             outcome(cert.verify())
         );
 
@@ -164,8 +156,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let cert = surface.read_certificate()?;
         println!(
             "  certificate  被証明者鍵ID {}, issued under {}  [{}]",
-            key_id(&cert.subject_key_id),
-            key_id(&cert.issuer_key_id),
+            cert.subject_key_id,
+            cert.issuer_key_id,
             outcome(cert.verify())
         );
         let issuer = &cert.public_key;
@@ -209,6 +201,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     path.display()
                 );
             }
+            // The record proves the data is authentic; a fresh signature proves the card that
+            // holds the matching private key is the one in the reader right now.
+            let challenge = surface.card().get_challenge()?;
+            let signature = surface.sign(&challenge)?;
+            println!(
+                "  challenge    16 bytes signed by the card key  [{}]",
+                outcome(SignatureScheme::Sha256DigestInfo.verify(
+                    &face.public_key,
+                    &challenge,
+                    &signature
+                ))
+            );
+
             if get("code-a").is_some() {
                 let n = surface.read_my_number_image()?;
                 println!("  my-number    signature [{}]", outcome(n.verify(issuer)));
@@ -236,13 +241,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::fs::write(&path, &der)?;
             println!("  {label:<12} {} bytes -> {}", der.len(), path.display());
         }
-        // One link only, and both ends came off the same card, so this says the CA certificate in
-        // EF 000B signed the one in EF 000A — not that either is genuine.
-        let auth = jpki.read_auth_certificate()?;
-        let ca = jpki.read_auth_ca_certificate()?;
+        // Leaf first, as the card hands them over. Both ends came off the same card, so this is
+        // internal consistency, not proof that either is genuine.
+        let chain = [
+            jpki.read_auth_certificate()?,
+            jpki.read_auth_ca_certificate()?,
+        ];
+        let (issued, _) = chain[0].validity();
         println!(
-            "  chain        auth <- auth-ca [{}]",
-            outcome(auth.verify_signature(&ca))
+            "  chain        auth <- auth-ca  [{}]",
+            outcome(Certificate::verify_chain(&chain, issued))
         );
 
         // Reported, never guessed at: an empty VERIFY costs nothing.

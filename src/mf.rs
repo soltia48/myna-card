@@ -509,7 +509,7 @@ mod tests {
         ]));
         let chain = MasterFile::new(&mut card).certificate_chain().unwrap();
         assert_eq!(chain.len(), 1);
-        assert!(chain[0].issuer_key_id.starts_with(b"6000020"));
+        assert_eq!(chain[0].issuer_key_id.number(), "6000020");
     }
 
     #[test]

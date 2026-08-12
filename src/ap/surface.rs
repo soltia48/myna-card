@@ -10,9 +10,9 @@
 
 use crate::card::{Card, Retries};
 use crate::data::{
-    CardVerifiableCertificate, Date, Image, RsaPublicKey, Sex, TlvFields, malformed,
+    CardVerifiableCertificate, Date, Image, KeyId, RsaPublicKey, Sex, TlvFields, malformed,
 };
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::pin::Pin;
 use crate::transport::Transmit;
 
@@ -67,6 +67,14 @@ impl<'a, T: Transmit> SurfaceAp<'a, T> {
         self.card.read_binary_all()
     }
 
+    /// Read this application's basic information from EF `0003`.
+    ///
+    /// Readable with nothing presented.
+    pub fn read_ap_basic_data(&mut self) -> Result<ApBasicData> {
+        let raw = self.read_ef(ef::AP_BASIC_DATA)?;
+        ApBasicData::parse(&raw)
+    }
+
     /// Read the age verification record of EF `0001`.
     ///
     /// Requires a VERIFY of the 生年月日 key, [`SurfaceAp::verify_birth_date`]. Check it against
@@ -100,6 +108,28 @@ impl<'a, T: Transmit> SurfaceAp<'a, T> {
         CardVerifiableCertificate::parse(&raw)
     }
 
+    /// Sign `data` with this application's own key — the one whose public half travels inside the
+    /// signed records, and which needs no credential.
+    ///
+    /// Hashing happens here: the card is handed a SHA-256 `DigestInfo`, and P2 is `00`, which
+    /// selects the application's default key. That is exactly what the issuer's own SDK sends.
+    ///
+    /// Signing a challenge and checking the result against the public key in a record is what
+    /// proves the card is present, as opposed to a copy of its files. The record has to be
+    /// verified too, or the key being challenged is one the attacker chose.
+    #[cfg(feature = "verify")]
+    pub fn sign(&mut self, data: &[u8]) -> Result<Vec<u8>> {
+        let digest_info = crate::data::sha256_digest_info(&crate::data::sha256(data));
+        self.card.call_ok(&crate::apdu::Command::with_data_le(
+            0x80,
+            crate::card::ins::COMPUTE_SIGNATURE,
+            0x00,
+            0x00,
+            digest_info,
+            256,
+        ))
+    }
+
     /// Present the 生年月日, six digits `YYMMDD` in the Japanese era year.
     ///
     /// This is the first six digits of 照合番号B on its own, and opens only the age verification
@@ -127,6 +157,78 @@ impl<'a, T: Transmit> SurfaceAp<'a, T> {
     pub fn retries(&mut self, key: u16) -> Result<Retries> {
         self.card.select_ef(key)?;
         self.card.pin_retries()
+    }
+}
+
+/// This application's basic information, EF `0003`.
+///
+/// ```text
+/// FF 30
+///   DF 31 04     four bytes that identify the layout
+///   DF 32 10     a key identifier, but not the one that signs this application's records
+///   DF 33 01     version
+///   DF 34 05     全国地方公共団体コード of the issuing municipality
+///   DF 35 8201 10  a key identifier, then 256 bytes: the 照合番号 encrypted under that key
+/// ```
+///
+/// Nothing here is secret — the file opens with no credential — and nothing here is signed. The
+/// municipality code repeats what 共通カードAP `0001` says, which is a cheap consistency check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApBasicData {
+    /// `DF31`, four bytes. Identifies the layout; `06 03 0E 01` on the cards seen.
+    pub identification: Vec<u8>,
+    /// `DF32` — a key identifier, which the issuer's SDK calls simply the public key.
+    ///
+    /// It is **not** the key EF `0004` certifies: on the cards seen this is `x000024` while the
+    /// certificate's 被証明者鍵ID is the municipality's own. What it names is not established.
+    pub public_key_id: KeyId,
+    /// `DF33`, one byte.
+    pub version: u8,
+    /// `DF34` — five digits, the 全国地方公共団体コード.
+    pub municipality_code: String,
+    /// `DF35` — the 照合番号 in encrypted form, and the key it is encrypted under.
+    ///
+    /// The private half is held by the issuer, so this is of no use to a reader; it is here
+    /// because leaving a field out of a parser hides it.
+    pub encrypted_reference_number: EncryptedReferenceNumber,
+}
+
+/// The 照合番号 as EF `0003` carries it: which key it is encrypted under, and the ciphertext.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EncryptedReferenceNumber {
+    /// The key the issuer encrypted it to.
+    pub key_id: KeyId,
+    /// 256 bytes — one RSA-2048 block.
+    pub data: Vec<u8>,
+}
+
+impl ApBasicData {
+    /// Tag of the file.
+    pub const TAG: u32 = 0xFF30;
+
+    /// Parse EF `0003`.
+    pub fn parse(raw: &[u8]) -> Result<Self> {
+        let f = TlvFields::parse(raw, Self::TAG, None)?;
+        let version = f.get(0xDF33)?;
+        let encrypted = f.get(0xDF35)?;
+        let (key_id, data) = encrypted.split_at_checked(KeyId::LEN).ok_or_else(|| {
+            Error::Malformed(format!(
+                "encrypted 照合番号 is {} bytes, too short to name a key",
+                encrypted.len()
+            ))
+        })?;
+        Ok(ApBasicData {
+            identification: f.get(0xDF31)?.to_vec(),
+            public_key_id: KeyId::parse(f.get(0xDF32)?)?,
+            version: *version
+                .first()
+                .ok_or_else(|| Error::Malformed("version field is empty".into()))?,
+            municipality_code: String::from_utf8_lossy(f.get(0xDF34)?).into_owned(),
+            encrypted_reference_number: EncryptedReferenceNumber {
+                key_id: KeyId::parse(key_id)?,
+                data: data.to_vec(),
+            },
+        })
     }
 }
 

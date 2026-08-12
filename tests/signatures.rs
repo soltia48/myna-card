@@ -28,8 +28,8 @@ fn issuer_key() -> RsaPublicKey {
 #[test]
 fn the_certificate_carries_a_2048_bit_key() {
     let cert = CardVerifiableCertificate::parse(&fixture("surface-0004.bin")).unwrap();
-    assert_eq!(cert.issuer_key_id, b"6000023\x08\x05001\0\0\0\0");
-    assert_eq!(cert.subject_key_id, b"1322121\x08\x05000\0\0\0\0");
+    assert_eq!(cert.issuer_key_id.to_string(), "6000023/001");
+    assert_eq!(cert.subject_key_id.to_string(), "1322121/000");
     assert_eq!(cert.signed_data.len(), 297);
     assert_eq!(cert.public_key.bits(), 2048);
     assert_eq!(cert.public_key.exponent, [0x01, 0x00, 0x01]);
@@ -124,7 +124,7 @@ mod card_verifiable_certificates {
     #[test]
     fn a_certificate_verifies_under_its_ca_key() {
         let (cert, ca) = synthetic();
-        assert_eq!(cert.issuer_key_id, b"5000023\x08\x05001\0\0\0\0");
+        assert_eq!(cert.issuer_key_id.to_string(), "5000023/001");
         assert_eq!(cert.signed_data.len(), CardVerifiableCertificate::BODY_LEN);
         cert.verify_with(&ca).expect("certificate signature");
     }
@@ -138,7 +138,7 @@ mod card_verifiable_certificates {
 
         // And the MF level fixtures, which are stored bare, parse as they are.
         let bare = CardVerifiableCertificate::parse(&fixture("mf-do-F8.bin")).unwrap();
-        assert!(bare.issuer_key_id.starts_with(b"6000020"));
+        assert_eq!(bare.issuer_key_id.number(), "6000020");
     }
 
     #[test]
@@ -181,7 +181,7 @@ mod card_verifiable_certificates {
             let cert = CardVerifiableCertificate::parse(&fixture(name)).unwrap();
             // A test hierarchy: the production identifiers begin "5000".
             assert!(
-                cert.issuer_key_id.starts_with(b"6000"),
+                cert.issuer_key_id.number().starts_with("6000"),
                 "{:?}",
                 cert.issuer_key_id
             );
@@ -227,4 +227,20 @@ mod card_verifiable_certificates {
             "{err}"
         );
     }
+}
+
+#[test]
+fn the_ap_basic_data_carries_the_municipality_and_an_encrypted_reference_number() {
+    let basic = myna_card::ap::surface::ApBasicData::parse(&fixture("surface-0003.bin")).unwrap();
+    assert_eq!(basic.municipality_code, "13221");
+    assert_eq!(basic.version, 0x00);
+    assert_eq!(basic.public_key_id.to_string(), "6000024/001");
+
+    // The 照合番号 is here, encrypted to a key the issuer holds — the same one on every card seen,
+    // production and test alike.
+    assert_eq!(
+        basic.encrypted_reference_number.key_id.to_string(),
+        "5900025/001"
+    );
+    assert_eq!(basic.encrypted_reference_number.data.len(), 256);
 }

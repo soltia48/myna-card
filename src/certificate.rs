@@ -123,6 +123,61 @@ impl std::fmt::Debug for Certificate {
 
 #[cfg(feature = "verify")]
 impl Certificate {
+    /// Check a chain, **leaf first**, as the card hands it over: EF `000A` then EF `000B`.
+    ///
+    /// Note the direction. [`CardVerifiableCertificate::verify_chain`](crate::data::CardVerifiableCertificate::verify_chain) takes its chain root first,
+    /// because that is the order *its* certificates come off the card; these two arrive the other
+    /// way round, and the type system will not catch a mix-up.
+    ///
+    /// Each certificate is checked against the next: its signature, that the next one's subject is
+    /// the issuer it names, and that `on` falls inside both validity periods. This crate has no
+    /// clock, so the caller supplies the date.
+    ///
+    /// What this does **not** do is decide that the last certificate is trustworthy. It is the top
+    /// of what the card carries, not a root you chose; a chain checked against a root that came
+    /// off the same card proves only internal consistency. Nor does it look at basic constraints,
+    /// key usage or revocation — JPKI publishes its own revocation service, and consulting it
+    /// needs a network.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::SignatureInvalid`] if a link does not verify, and
+    /// [`crate::Error::Malformed`] if the chain is empty, if two certificates do not name each
+    /// other, or if one is not valid on `on`.
+    pub fn verify_chain(chain: &[Certificate], on: Date) -> Result<()> {
+        let (leaf, rest) = chain
+            .split_first()
+            .ok_or_else(|| malformed("an empty chain verifies nothing"))?;
+        let mut subject = leaf;
+        if !subject.is_valid_on(on) {
+            let (from, to) = subject.validity();
+            return Err(malformed(&format!(
+                "{} is valid {from} to {to}, not on {on}",
+                subject.subject()
+            )));
+        }
+        for issuer in rest {
+            if subject.issuer() != issuer.subject() {
+                return Err(malformed(&format!(
+                    "chain is broken: {:?} names issuer {:?}, next is {:?}",
+                    subject.subject(),
+                    subject.issuer(),
+                    issuer.subject()
+                )));
+            }
+            if !issuer.is_valid_on(on) {
+                let (from, to) = issuer.validity();
+                return Err(malformed(&format!(
+                    "{} is valid {from} to {to}, not on {on}",
+                    issuer.subject()
+                )));
+            }
+            subject.verify_signature(issuer)?;
+            subject = issuer;
+        }
+        Ok(())
+    }
+
     /// Check this certificate's own signature against the certificate above it.
     ///
     /// One link of a chain, not a chain: the caller decides whether `issuer` is trusted, and
