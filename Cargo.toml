@@ -27,10 +27,6 @@ verify = ["dep:rsa", "dep:sha2", "dep:x509-cert"]
 mock = []
 
 [[example]]
-name = "list_readers"
-required-features = ["pcsc"]
-
-[[example]]
 name = "dump_certificates"
 required-features = ["pcsc"]
 
