@@ -1,8 +1,8 @@
 //! The values the card stores, and the credentials derived from them.
 //!
-//! The layouts here were established by reading a physical card; `card-reference.md` records the
-//! measurements. JICSAP specifies the containers — transparent and record structured files, and
-//! the two TLV encodings — but says nothing about what any application puts inside them.
+//! JICSAP specifies the containers — transparent and record structured files, and the two TLV
+//! encodings — but says nothing about what any application puts inside them, so every layout here
+//! was established by reading a physical card and is described on the type that parses it.
 
 use std::fmt;
 
@@ -292,8 +292,10 @@ impl RsaPublicKey {
 /// card names `"6000023"` and `"6000033"` instead. See [`crate::ca`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CardVerifiableCertificate {
-    /// 証明者鍵ID — which key signed this certificate, 16 bytes in the shape described by
-    /// `card-reference.md`.
+    /// 証明者鍵ID — which key signed this certificate.
+    ///
+    /// 16 bytes: seven ASCII digits, `08 05`, three more ASCII digits, then three NUL bytes and
+    /// one byte that is not always zero.
     pub issuer_key_id: Vec<u8>,
     /// 被証明者鍵ID — which key is being certified, 16 bytes.
     pub subject_key_id: Vec<u8>,

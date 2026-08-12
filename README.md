@@ -8,13 +8,8 @@ over PC/SC.
 The transport, APDU and file-access layers are implemented and unit tested, and the files whose
 layouts have been worked out are decoded into types rather than handed back as bytes: the 個人番号,
 the 基本4情報, the card info record, the card face with its images, and the card-verifiable
-certificates. Files still marked unidentified in `card-reference.md` are reachable as raw bytes
-through each application's `read_ef`.
-
-Two documents sit behind the code. [`spec/`](spec/) holds the JICSAP specification the card is
-built on, cited throughout the doc comments as "JICSAP" plus a section or table number.
-[`card-reference.md`](card-reference.md) records what the card actually does — the file map, the
-command behaviour, and the credential formats — all measured against a physical card.
+certificates. Files whose layout has not been worked out are still reachable, as raw bytes, through
+each application's `read_ef`.
 
 ## Layers
 
@@ -66,8 +61,7 @@ let signature = jpki.sign_with_auth_key(SignatureScheme::Sha256DigestInfo, messa
 `CLA 80 INS 2A` is the card's own command, not one of the JICSAP five. Its P1 selects one of six
 schemes — three padding modes, each in a "you supply the SHA-256" and a "the card hashes it"
 variant — modelled as `SignatureScheme`. All six were established by exercising every P1 value
-against a card and checking the result with the certificate's public key; see
-[`card-reference.md`](card-reference.md) for the measurements.
+against a card and checking each result against the certificate's public key.
 
 `Sha256DigestInfo` is the ordinary choice: hand it the message and the signature verifies as a
 standard `sha256WithRSAEncryption`.
@@ -105,10 +99,11 @@ elsewhere; the RSA and X.509 dependencies go with it.
 `CardVerifiableCertificate::verify()` resolves the CA key from the certificate's 証明者鍵ID using
 the table in `ca`, or take `verify_with()` to supply one yourself.
 
-The table holds the two production keys and three from the test hierarchy JPKI test cards are
-issued under, so certificates from either verify without a key being supplied by hand. Any other
-証明者鍵ID returns `UnknownCertificateAuthority` — nothing was checked, which is a different answer
-from a bad signature and is reported as one.
+The table holds six keys: the three production 証明者鍵ID and the three matching ones of the test
+hierarchy JPKI test cards are issued under. Certificates from either verify without a key being
+supplied by hand, and so do the intermediates below them, whose keys travel inside the certificate
+above. Any other 証明者鍵ID returns `UnknownCertificateAuthority` — nothing was checked, which is a
+different answer from a bad signature and is reported as one.
 
 ### Reading a card
 
@@ -148,13 +143,18 @@ every attempt after that. A key with no retry limit answers `6300` and never rep
 
 - Full certificate validation. `Certificate::verify_signature` checks one link against the issuer
   you hand it; nothing walks a chain on its own, checks names or key usage, or consults revocation.
-- The files that stay unidentified: 券面入力補助AP `0005` and the spare public key in its `0006`,
-  and 公的個人認証AP `0008` and `0009`. `card-reference.md` records what was searched and ruled out.
-- Secure messaging (JICSAP 5.3) and the extended system commands. The card answers 69FC to the
-  secure messaging class bytes, so there is nothing on the other side to talk to; the extended
-  commands' instruction bytes are in `card::ins` but none of them helps read a card.
-- Answer-to-Reset parsing (JICSAP 3.2). The historical bytes carry the country code and the
-  card's capability flags.
+- GET DATA. `00 CA` is not a JICSAP command and is not in this crate, but the card implements it,
+  and with no DF selected it is the only way to reach a further fourteen data objects — among them
+  the card's contact-interface ATR, its identification number, and two more card-verifiable
+  certificates.
+- The files that stay unidentified: 公的個人認証AP `0008` and `0009`, and the trailing 128 bytes of
+  券面入力補助AP `0005`.
+- Secure messaging (JICSAP 5.3) and the extended system commands. The card refuses every secure
+  messaging class byte — 6882 to SELECT FILE, and 69FC to READ BINARY and VERIFY under `08` and
+  `0C` — so there is nothing on the other side to talk to; the extended commands' instruction bytes
+  are in `card::ins` but none of them helps read a card.
+- Answer-to-Reset parsing (JICSAP 3.2). There is nothing to parse on this card: the contact ATR,
+  which the card will hand over through GET DATA, declares zero historical bytes.
 
 ## License
 
