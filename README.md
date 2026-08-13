@@ -90,7 +90,7 @@ cert.verify()?;                                               // the issuer key 
 let face = surface.read_card_face()?;
 face.verify(&cert.public_key)?;                               // the data is authentic
 
-let challenge = surface.card().get_challenge()?;
+let challenge = surface.card().get_challenge(16)?;
 let signature = surface.sign(&challenge)?;                    // the card's own key, no PIN
 SignatureScheme::Sha256DigestInfo
     .verify(&face.public_key, &challenge, &signature)?;       // the card is here

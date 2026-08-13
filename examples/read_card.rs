@@ -233,7 +233,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             // The record proves the data is authentic; a fresh signature proves the card that
             // holds the matching private key is the one in the reader right now.
-            let challenge = surface.card().get_challenge()?;
+            let challenge = surface.card().get_challenge(16)?;
             let signature = surface.sign(&challenge)?;
             println!(
                 "  challenge    16 bytes signed by the card key  [{}]",

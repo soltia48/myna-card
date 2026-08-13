@@ -426,21 +426,66 @@ impl<T: Transmit> Card<T> {
         Ok([&[0x3B][..], &stored].concat())
     }
 
-    /// GET CHALLENGE — sixteen random bytes from the card.
+    /// INTERNAL AUTHENTICATE — have the card sign a challenge with the key named by `sfi`.
     ///
-    /// The length is not a parameter because the card offers no choice: `Le` = 16 answers and
-    /// every other length is refused with 6985.
-    pub fn get_challenge(&mut self) -> Result<[u8; 16]> {
+    /// The card hashes nothing: it signs `DigestInfo(SHA-256(challenge))` under PKCS #1 v1.5, so
+    /// the result is an ordinary `sha256WithRSAEncryption` signature over the challenge. It is
+    /// deterministic, and the challenge may be 1 to 255 bytes.
+    ///
+    /// Only one key on this card answers: 共通カードAP `0019`, and it answers with no credential
+    /// presented. Every other key refuses — 6982 if it is behind a PIN, 6985 for the two 券面
+    /// signing keys, which sign through [`ins::COMPUTE_SIGNATURE`] instead.
+    ///
+    /// The public half of `0019` is not on the card, so nothing read from the card can check the
+    /// result. A verifier needs that key from somewhere else.
+    pub fn internal_authenticate(&mut self, sfi: ShortEfId, challenge: &[u8]) -> Result<Vec<u8>> {
+        if challenge.is_empty() || challenge.len() > 255 {
+            return Err(Error::Malformed(format!(
+                "challenge must be 1 to 255 bytes, got {}",
+                challenge.len()
+            )));
+        }
+        self.call_ok(&Command::with_data_le(
+            cla::USER,
+            ins::INTERNAL_AUTHENTICATE,
+            0x00,
+            0x80 | sfi.value(),
+            challenge.to_vec(),
+            256,
+        ))
+    }
+
+    /// GET CHALLENGE — `len` random bytes from the card, 1 to 256 of them.
+    ///
+    /// Every length in that range is honoured exactly; the extended form is refused with 6985, so
+    /// 256 is the ceiling. P1 and P2 must both be zero and the card answers at the master file
+    /// level as well as inside an application.
+    ///
+    /// Sixteen is what the 券面 protocol wants for a challenge. Larger values make this the card's
+    /// random number generator, which is a fair description of it: sixteen 256 byte draws come
+    /// back distinct with a byte distribution flat to the limit of that sample.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ExpectedLengthOutOfRange`] if `len` is zero or above 256, before anything is sent.
+    pub fn get_challenge(&mut self, len: u16) -> Result<Vec<u8>> {
+        if len == 0 || len > 256 {
+            return Err(Error::ExpectedLengthOutOfRange(u32::from(len)));
+        }
         let data = self.call_ok(&Command::with_le(
             cla::USER,
             ins::GET_CHALLENGE,
             0x00,
             0x00,
-            16,
+            u32::from(len),
         ))?;
-        data.try_into().map_err(|d: Vec<u8>| {
-            Error::Malformed(format!("challenge is {} bytes, not 16", d.len()))
-        })
+        if data.len() != usize::from(len) {
+            return Err(Error::Malformed(format!(
+                "asked for a {len} byte challenge and got {}",
+                data.len()
+            )));
+        }
+        Ok(data)
     }
 
     /// GET DATA — retrieve the data object named by `tag`, which goes in P1-P2.
@@ -748,6 +793,52 @@ mod tests {
                 Error::PinBlocked
             ));
         }
+    }
+
+    #[test]
+    fn internal_authenticate_names_the_key_by_short_identifier() {
+        let mut card = Card::new(MockTransport::new([ok(&[0xAA; 256])]));
+        let sfi = ShortEfId::from_ef_id(0x0019).unwrap();
+        card.internal_authenticate(sfi, b"hello").unwrap();
+        assert_eq!(
+            card.transport().sent[0],
+            [&[0x00, 0x88, 0x00, 0x99, 0x05][..], b"hello", &[0x00][..]].concat()
+        );
+    }
+
+    #[test]
+    fn get_challenge_asks_for_the_length_it_was_given() {
+        // 256 is the largest the card will produce, and it travels as an Le of zero.
+        let mut card = Card::new(MockTransport::new([ok(&[0xAB; 256]), ok(&[0xCD; 8])]));
+        assert_eq!(card.get_challenge(256).unwrap().len(), 256);
+        assert_eq!(card.get_challenge(8).unwrap(), [0xCD; 8]);
+        assert_eq!(card.transport().sent[0], [0x00, 0x84, 0x00, 0x00, 0x00]);
+        assert_eq!(card.transport().sent[1], [0x00, 0x84, 0x00, 0x00, 0x08]);
+    }
+
+    #[test]
+    fn get_challenge_rejects_a_length_the_card_will_not_produce() {
+        let mut card = Card::new(MockTransport::new([]));
+        assert!(card.get_challenge(0).is_err());
+        assert!(card.get_challenge(257).is_err());
+        // Neither reached the card: the extended form is refused with 6985 anyway.
+        assert!(card.transport().sent.is_empty());
+    }
+
+    #[test]
+    fn get_challenge_notices_a_short_answer() {
+        let mut card = Card::new(MockTransport::new([ok(&[0x01, 0x02, 0x03])]));
+        assert!(card.get_challenge(16).is_err());
+    }
+
+    #[test]
+    fn internal_authenticate_rejects_a_challenge_the_command_cannot_carry() {
+        let mut card = Card::new(MockTransport::new([ok(&[])]));
+        let sfi = ShortEfId::from_ef_id(0x0019).unwrap();
+        assert!(card.internal_authenticate(sfi, b"").is_err());
+        assert!(card.internal_authenticate(sfi, &[0u8; 256]).is_err());
+        // Neither reached the card.
+        assert!(card.transport().sent.is_empty());
     }
 
     #[test]

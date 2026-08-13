@@ -7,7 +7,7 @@
 //! municipality codes of the issuer, and the expiry date. EF 0002 matches EF 0002 of the 住基
 //! application, whose content is not yet understood.
 
-use crate::card::{Card, Retries};
+use crate::card::{Card, Retries, ShortEfId};
 use crate::data::{Date, malformed};
 use crate::error::Result;
 use crate::pin::Pin;
@@ -24,6 +24,9 @@ pub mod ef {
     /// One 16 byte key reference, byte-identical to EF `0002` of the 住基 application. Which key
     /// it names is not identified.
     pub const KEY_REFERENCE: u16 = 0x0002;
+    /// Key that answers INTERNAL AUTHENTICATE, with no credential. Its public half is nowhere on
+    /// the card.
+    pub const INTERNAL_AUTHENTICATION_KEY: u16 = 0x0019;
     /// Key reference for the PIN, which appears to be shared with the 住基 and 券面入力補助
     /// applications.
     pub const PIN: u16 = 0x001C;
@@ -57,6 +60,19 @@ impl<'a, T: Transmit> CommonAp<'a, T> {
     pub fn read_card_info(&mut self) -> Result<CardInfo> {
         let raw = self.read_record(ef::CARD_INFO, 1)?;
         CardInfo::parse(&raw)
+    }
+
+    /// Have the card sign `challenge` with the key in EF `0019`, without presenting anything.
+    ///
+    /// The only key on the card that answers INTERNAL AUTHENTICATE. What it is for is not
+    /// established: its public half is on no file of the card, so nothing readable here can check
+    /// the result, and whether the key is per card or shared across a hierarchy is unknown.
+    ///
+    /// The signature is `sha256WithRSAEncryption` over the challenge — see
+    /// [`Card::internal_authenticate`](crate::card::Card::internal_authenticate).
+    pub fn internal_authenticate(&mut self, challenge: &[u8]) -> Result<Vec<u8>> {
+        let sfi = ShortEfId::from_ef_id(ef::INTERNAL_AUTHENTICATION_KEY)?;
+        self.card.internal_authenticate(sfi, challenge)
     }
 
     /// Present the PIN.
