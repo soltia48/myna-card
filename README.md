@@ -184,7 +184,7 @@ every attempt after that. A key with no retry limit answers `6300` and never rep
 - Revocation. Chains are checked against published roots, but JPKI publishes revocation as a
   separate online service and nothing here consults it. Basic constraints and key usage are not
   checked either.
-- The files that stay unidentified: 公的個人認証AP `0008` and `0009`, 券面事項確認AP `0006` and
+- The files that stay unidentified: 公的個人認証AP `0009`, 券面事項確認AP `0006` and
   券面入力補助AP `0008` — both sixteen `FF` bytes — and the trailing 128 bytes of 券面入力補助AP
   `0005`.
 - Secure messaging (JICSAP 5.3) and the extended system commands. The card refuses every secure

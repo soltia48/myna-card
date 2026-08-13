@@ -29,8 +29,9 @@ pub mod ef {
     /// Token information, 160 bytes. Its first 32 bytes name the token type; see
     /// [`TokenType`](super::TokenType).
     pub const TOKEN_INFO: u16 = 0x0006;
-    /// Three bytes, `8F 8F 00`, whose meaning is not known.
-    pub const UNKNOWN_0008: u16 = 0x0008;
+    /// Three bytes saying which of the two certificates this card carries. See
+    /// [`CertificateAvailability`](super::CertificateAvailability).
+    pub const CERTIFICATE_AVAILABILITY: u16 = 0x0008;
     /// Key reference the terminal's card-verifiable certificate is checked against, by
     /// VERIFY CERTIFICATE. See [`crate::card::ins::VERIFY_CERTIFICATE`].
     pub const TERMINAL_CA: u16 = 0x0016;
@@ -81,6 +82,19 @@ impl<'a, T: Transmit> JpkiAp<'a, T> {
         // A fixed 160 byte record, not TLV, so read it as stored.
         let raw = self.card.read_binary_physical()?;
         Ok(TokenType::from_bytes(&raw))
+    }
+
+    /// Read EF `0008`, which says which of the two certificates the card carries.
+    ///
+    /// No credential is needed. See [`CertificateAvailability`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Malformed`] if the file is not three bytes long.
+    pub fn read_certificate_availability(&mut self) -> Result<CertificateAvailability> {
+        self.card.select_ef(ef::CERTIFICATE_AVAILABILITY)?;
+        let raw = self.card.read_binary_physical()?;
+        CertificateAvailability::parse(&raw)
     }
 
     /// Read the 利用者証明用証明書, DER encoded.
@@ -443,6 +457,25 @@ mod tests {
     }
 
     #[test]
+    fn reads_the_certificate_availability() {
+        let mut card = Card::new(MockTransport::new([
+            vec![0x90, 0x00],
+            vec![0x8F, 0x8F, 0x00, 0x90, 0x00],
+        ]));
+        let mut ap = JpkiAp { card: &mut card };
+        let a = ap.read_certificate_availability().unwrap();
+        assert_eq!(a.raw, [0x8F, 0x8F, 0x00]);
+        assert!(a.has_sign_certificate() && a.has_auth_certificate());
+        // A card with no 署名用証明書 — a child under fifteen, for instance.
+        let missing = CertificateAvailability::parse(&[0x00, 0x8F, 0x00]).unwrap();
+        assert!(!missing.has_sign_certificate());
+        assert!(missing.has_auth_certificate());
+        // The file has no filler, so a different length is a different card.
+        assert!(CertificateAvailability::parse(&[0x8F, 0x8F]).is_err());
+        assert!(CertificateAvailability::parse(&[0x8F; 16]).is_err());
+    }
+
+    #[test]
     fn knows_which_schemes_hash_on_the_card() {
         assert!(!SignatureScheme::Verbatim.hashes_on_card());
         assert!(!SignatureScheme::PreHashedDigestInfo.hashes_on_card());
@@ -450,6 +483,66 @@ mod tests {
         assert!(SignatureScheme::Sha256Bare.hashes_on_card());
         assert!(SignatureScheme::Sha256DigestInfo.hashes_on_card());
         assert!(SignatureScheme::Sha256Pss.hashes_on_card());
+    }
+}
+
+/// Which of the application's two certificates the card carries, from EF `0008`.
+///
+/// A cardholder may hold the 利用者証明用 certificate without the 署名用 one — the signing
+/// certificate is optional, and is not issued to children under fifteen — so a reader that is
+/// about to ask for a 署名用パスワード can find out first whether there is anything to sign with.
+/// The file is readable without a credential.
+///
+/// The three bytes are `8F 8F 00` on a card carrying both. Only the first two are used by
+/// デジタル庁's own application, which names them exactly as they are named here; what the third
+/// byte means is not known, so it is kept as [`raw`](Self::raw) rather than interpreted.
+///
+/// `8F` is not a boolean and nothing here treats it as one. [`has_sign_certificate`] and
+/// [`has_auth_certificate`] report "not the value a card with the certificate shows", which is the
+/// most that one card can establish.
+///
+/// [`has_sign_certificate`]: Self::has_sign_certificate
+/// [`has_auth_certificate`]: Self::has_auth_certificate
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CertificateAvailability {
+    /// Byte 0 — デジタル庁's `SignatureCertificateAvailability`.
+    pub sign: u8,
+    /// Byte 1 — デジタル庁's `UserAuthCertificateAvailability`.
+    pub auth: u8,
+    /// All three bytes as stored.
+    pub raw: [u8; 3],
+}
+
+impl CertificateAvailability {
+    /// The value both bytes take on a card that carries both certificates.
+    pub const PRESENT: u8 = 0x8F;
+
+    /// Parse the three bytes of EF `0008`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Malformed`] if there are not exactly three of them. The EF has no filler, so a
+    /// different length means a different card, not a short read.
+    pub fn parse(raw: &[u8]) -> Result<Self> {
+        let len = raw.len();
+        let raw: [u8; 3] = raw
+            .try_into()
+            .map_err(|_| Error::Malformed(format!("EF 0008 is three bytes, not {len}")))?;
+        Ok(CertificateAvailability {
+            sign: raw[0],
+            auth: raw[1],
+            raw,
+        })
+    }
+
+    /// Whether the 署名用証明書 is there, as far as one card can say.
+    pub fn has_sign_certificate(&self) -> bool {
+        self.sign == Self::PRESENT
+    }
+
+    /// Whether the 利用者証明用証明書 is there, as far as one card can say.
+    pub fn has_auth_certificate(&self) -> bool {
+        self.auth == Self::PRESENT
     }
 }
 
