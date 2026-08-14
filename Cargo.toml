@@ -21,7 +21,7 @@ pcsc = { version = "2.9", optional = true }
 rsa = { version = "0.9", optional = true }
 sha2 = { version = "0.10", optional = true }
 thiserror = "2"
-x509-cert = { version = "0.2", optional = true }
+x509-cert = { version = "0.3", optional = true }
 
 [features]
 default = ["pcsc", "verify"]
