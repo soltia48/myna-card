@@ -1,0 +1,21 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "ci"
+
+  # This crate handles PINs and checks signatures on identity documents, and
+  # leans on an RSA implementation and an X.509 parser to do it; keeping those
+  # current is part of keeping it trustworthy.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "deps"
+    groups:
+      patch-and-minor:
+        update-types: [minor, patch]

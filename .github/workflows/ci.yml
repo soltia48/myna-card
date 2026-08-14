@@ -1,0 +1,236 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same branch supersedes an older run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+# `-D warnings` is applied in the lint job only.  Setting it globally would
+# make every job fail the day a new compiler release adds a lint, which is
+# noise: the lint job alone reports that, and the tests keep running.
+
+jobs:
+  lint:
+    name: Format, lints and docs
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      # `pcsc` links against libpcsclite, which Ubuntu runners do not carry.
+      # macOS and Windows have their PC/SC implementation in the system.
+      - name: Install libpcsclite
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpcsclite-dev
+
+      - name: Formatting
+        run: cargo fmt --all --check
+
+      # The crate compiles different code depending on `pcsc` and `verify`, so
+      # the ends of that range have to be linted, not just the default.
+      - name: Clippy (default features)
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Clippy (all features)
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Clippy (no default features)
+        run: cargo clippy --all-targets --no-default-features -- -D warnings
+
+      # `transport::pcsc` and the certificate types exist only with their
+      # features on, and the crate docs link to them.  Document with
+      # everything on, which is also what docs.rs is configured to show.
+      - name: Rustdoc
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --no-deps --all-features
+
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install libpcsclite
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpcsclite-dev
+
+      # No test touches a reader — they run against the fixtures under
+      # `tests/fixtures` and the in-memory transport — so no runner needs a
+      # card or a running pcscd.  The point of running elsewhere is that APDU
+      # assembly and TLV parsing are plain byte handling, and should behave
+      # the same everywhere.
+      - name: Test
+        run: cargo test --all-features
+
+  features:
+    name: Features (${{ matrix.features }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        features:
+          - "--all-features"
+          - "--no-default-features"
+          - "--no-default-features --features pcsc"
+          - "--no-default-features --features verify"
+          - "--no-default-features --features mock"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install libpcsclite
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpcsclite-dev
+
+      # Both optional features are advertised as independently droppable, and
+      # `required-features` on the examples has to keep up with that.  Only
+      # `--all-targets` builds the examples, so it is what checks that claim.
+      - name: Build ${{ matrix.features }}
+        run: cargo build --all-targets ${{ matrix.features }}
+
+      - name: Test ${{ matrix.features }}
+        run: cargo test ${{ matrix.features }}
+
+      # Cargo.toml states that turning a feature off leaves a crate without
+      # the dependency behind it.  This is where that claim is checked.
+      - name: Confirm the optional dependencies are absent
+        run: |
+          set -euo pipefail
+          graph=$(cargo tree ${{ matrix.features }} --prefix none | cut -d' ' -f1 | sort -u)
+          absent() {
+            if grep -qx "$1" <<<"$graph"; then
+              echo "::error::$1 is in the dependency graph without the $2 feature"
+              exit 1
+            fi
+            echo "no $1 in the graph"
+          }
+          case "${{ matrix.features }}" in
+            *"--features pcsc") absent rsa verify ;;
+            *"--features verify") absent pcsc pcsc ;;
+            *"--features mock"|"--no-default-features")
+              absent pcsc pcsc
+              absent rsa verify
+              ;;
+          esac
+
+  msrv:
+    name: Minimum supported Rust version
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read rust-version from Cargo.toml
+        id: msrv
+        run: |
+          version=$(grep -m1 '^rust-version' Cargo.toml | cut -d'"' -f2)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Cargo.toml declares rust-version = $version"
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install libpcsclite
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpcsclite-dev
+
+      # Building is not enough: the declared version has to be able to run the
+      # suite, or the claim in Cargo.toml is not worth much.
+      - name: Test on the declared minimum
+        run: cargo test --all-features
+
+  audit:
+    name: Security advisories
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      # This crate handles PINs and checks signatures on identity documents,
+      # and leans on an RSA implementation and an X.509 parser to do it.  An
+      # advisory against any of them is something the repository should hear
+      # about.
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  package:
+    name: Package
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install libpcsclite
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpcsclite-dev
+
+      - name: Build the crate archive
+        run: cargo package
+
+      # The CA certificates under `certs/` are `include_bytes!`d by
+      # `src/certificate.rs`, so the archive is broken if they are ever
+      # excluded by accident.  The `exclude` list, meanwhile, keeps the CI
+      # configuration out of what gets published.
+      - name: Report contents and check what is in the archive
+        run: |
+          set -euo pipefail
+          listing=$(cargo package --list)
+          echo "$listing" | sed 's/^/  /'
+          for required in certs/authca01.cer certs/signca01.cer LICENSE README.md; do
+            if ! grep -qx "$required" <<<"$listing"; then
+              echo "::error::$required is missing from the crate archive"
+              exit 1
+            fi
+          done
+          if grep -q '^\.github/' <<<"$listing"; then
+            echo "::error::.github/ reached the crate archive"
+            exit 1
+          fi
+          size=$(du -k target/package/*.crate | cut -f1)
+          echo "crate archive: ${size} KiB"

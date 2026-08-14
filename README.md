@@ -1,5 +1,9 @@
 # myna-card
 
+[![CI](https://github.com/soltia48/myna-card/actions/workflows/ci.yml/badge.svg)](https://github.com/soltia48/myna-card/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/myna-card.svg)](https://crates.io/crates/myna-card)
+[![docs.rs](https://docs.rs/myna-card/badge.svg)](https://docs.rs/myna-card)
+
 A Rust library for accessing the Japanese Individual Number Card (個人番号カード / My Number Card)
 over PC/SC.
 

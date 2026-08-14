@@ -1,13 +1,20 @@
 [package]
 name = "myna-card"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
 rust-version = "1.85"
 description = "A library for accessing the Japanese Individual Number Card (個人番号カード) over PC/SC"
 license = "MIT"
-repository = "https://github.com/example/myna-card"
+repository = "https://github.com/soltia48/myna-card"
 keywords = ["smartcard", "pcsc", "iso7816", "mynumber", "jpki"]
 categories = ["api-bindings", "authentication"]
+# CI configuration is not part of the crate.
+exclude = [".github/"]
+
+# `transport::pcsc` and everything behind `verify` exist only with those features on, and the
+# crate docs link to them. Document with everything on, which is what docs.rs should show.
+[package.metadata.docs.rs]
+all-features = true
 
 [dependencies]
 pcsc = { version = "2.9", optional = true }
@@ -26,10 +33,17 @@ verify = ["dep:rsa", "dep:sha2", "dep:x509-cert"]
 # Expose the in-memory test transport to downstream crates.
 mock = []
 
+# Every example talks to a reader, so none of them build without the PC/SC backend, and all but
+# `list_readers` print certificate contents, which is behind `verify`. Without these, building
+# with a subset of the features fails on the examples even though the library itself builds fine.
 [[example]]
 name = "dump_certificates"
+required-features = ["pcsc", "verify"]
+
+[[example]]
+name = "list_readers"
 required-features = ["pcsc"]
 
 [[example]]
 name = "read_card"
-required-features = ["pcsc"]
+required-features = ["pcsc", "verify"]

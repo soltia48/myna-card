@@ -20,11 +20,15 @@
 //!
 //! # Example
 //!
+//! This one needs the default features: the PC/SC backend comes from `pcsc`, and reading a
+//! certificate or checking a signature against it comes from `verify`.
+//!
 //! ```no_run
+//! # #[cfg(all(feature = "pcsc", feature = "verify"))]
+//! # fn main() -> Result<(), myna_card::Error> {
 //! use myna_card::ap::jpki::{JpkiAp, SignatureScheme};
 //! use myna_card::{Pin, transport::pcsc};
 //!
-//! # fn main() -> Result<(), myna_card::Error> {
 //! let mut card = pcsc::connect_any()?;
 //! let mut jpki = JpkiAp::select(&mut card)?;
 //!
@@ -42,6 +46,8 @@
 //! let cert = jpki.read_sign_certificate()?;
 //! # Ok(())
 //! # }
+//! # #[cfg(not(all(feature = "pcsc", feature = "verify")))]
+//! # fn main() {}
 //! ```
 //!
 //! # Warning

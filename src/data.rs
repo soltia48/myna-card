@@ -626,6 +626,163 @@ fn hex(bytes: &[u8]) -> String {
         .join(" ")
 }
 
+/// Build the PKCS #1 v1.5 `DigestInfo` for a SHA-256 digest.
+///
+/// ```text
+/// 30 <len> 30 0D 06 09 60 86 48 01 65 03 04 02 01 05 00 04 <n> <digest>
+/// ```
+///
+/// `digest` is normally 32 bytes, but the card face record of 券面事項確認AP `0002` puts three
+/// concatenated SHA-256 digests in one `DigestInfo` and declares the length accordingly — so the
+/// length is taken from what is passed rather than fixed.
+pub fn sha256_digest_info(digest: &[u8]) -> Vec<u8> {
+    const ALGORITHM: [u8; 15] = [
+        0x30, 0x0D, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00,
+    ];
+    let inner = ALGORITHM.len() + 2 + digest.len();
+    let mut out = vec![0x30];
+    if inner < 0x80 {
+        out.push(inner as u8);
+    } else {
+        out.push(0x81);
+        out.push(inner as u8);
+    }
+    out.extend_from_slice(&ALGORITHM);
+    out.push(0x04);
+    out.push(digest.len() as u8);
+    out.extend_from_slice(digest);
+    out
+}
+
+#[cfg(feature = "verify")]
+impl RsaPublicKey {
+    fn to_rsa(&self) -> Result<rsa::RsaPublicKey> {
+        rsa::RsaPublicKey::new(
+            rsa::BigUint::from_bytes_be(&self.modulus),
+            rsa::BigUint::from_bytes_be(&self.exponent),
+        )
+        .map_err(|_| Error::SignatureInvalid("the public key is not usable"))
+    }
+
+    /// Verify a PKCS #1 v1.5 signature whose payload is `digest_info`, byte for byte.
+    ///
+    /// The padding is checked in full — this is not a search for the payload inside the block —
+    /// so a signature with anything appended is rejected.
+    pub fn verify_pkcs1(&self, digest_info: &[u8], signature: &[u8]) -> Result<()> {
+        self.to_rsa()?
+            .verify(rsa::Pkcs1v15Sign::new_unprefixed(), digest_info, signature)
+            .map_err(|_| Error::SignatureInvalid("PKCS #1 v1.5 signature does not verify"))
+    }
+
+    /// Verify a PKCS #1 v1.5 signature over the SHA-256 of `message`.
+    pub fn verify_pkcs1_sha256(&self, message: &[u8], signature: &[u8]) -> Result<()> {
+        use sha2::Digest as _;
+        let digest = sha2::Sha256::digest(message);
+        self.verify_pkcs1(&sha256_digest_info(&digest), signature)
+    }
+
+    /// Verify an RSASSA-PSS signature over the SHA-256 of `message`.
+    pub fn verify_pss_sha256(&self, message: &[u8], signature: &[u8]) -> Result<()> {
+        use sha2::Digest as _;
+        self.verify_pss_prehashed(&sha2::Sha256::digest(message), signature)
+    }
+
+    /// Verify an RSASSA-PSS signature over a SHA-256 digest you already have.
+    pub fn verify_pss_prehashed(&self, digest: &[u8], signature: &[u8]) -> Result<()> {
+        self.to_rsa()?
+            .verify(rsa::Pss::new::<sha2::Sha256>(), digest, signature)
+            .map_err(|_| Error::SignatureInvalid("PSS signature does not verify"))
+    }
+}
+
+/// SHA-256 of `data`.
+#[cfg(feature = "verify")]
+pub fn sha256(data: &[u8]) -> [u8; 32] {
+    use sha2::Digest as _;
+    sha2::Sha256::digest(data).into()
+}
+
+#[cfg(all(test, feature = "verify"))]
+mod verify_tests {
+    use super::*;
+
+    #[test]
+    fn builds_digest_infos_of_both_lengths() {
+        // The ordinary one: 32 byte digest, 49 byte structure.
+        let one = sha256_digest_info(&[0xAA; 32]);
+        assert_eq!(&one[..2], &[0x30, 0x31]);
+        assert_eq!(&one[17..19], &[0x04, 0x20]);
+        assert_eq!(one.len(), 51);
+
+        // The card face record declares three concatenated digests in one DigestInfo.
+        let three = sha256_digest_info(&[0xAA; 96]);
+        assert_eq!(&three[..2], &[0x30, 0x71]);
+        assert_eq!(&three[17..19], &[0x04, 0x60]);
+        assert_eq!(three.len(), 115);
+    }
+}
+
+#[cfg(feature = "verify")]
+impl CardVerifiableCertificate {
+    /// Check the certificate against the CA key its [`issuer_key_id`](Self::issuer_key_id) names.
+    ///
+    /// The key is looked up in [`crate::ca`], which carries the two production keys. To supply one
+    /// yourself instead, use [`verify_with`](Self::verify_with).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::UnknownCertificateAuthority`] if no key is known for that identifier — which is
+    /// what a test card gets, since its certificates are issued under `"6000023"`/`"6000033"`.
+    /// Nothing is checked in that case; it is not a signature failure.
+    pub fn verify(&self) -> Result<()> {
+        let ca = crate::ca::find(&self.issuer_key_id)
+            .ok_or(Error::UnknownCertificateAuthority(self.issuer_key_id))?;
+        self.verify_with(&ca.to_public_key())
+    }
+
+    /// Check a chain: the first certificate against [`crate::ca`], each later one against the key
+    /// the certificate before it certifies.
+    ///
+    /// This is what makes the master file chain self-contained — only its root needs a key that
+    /// did not come off the card. The links are checked in order and the first failure is
+    /// returned, so a chain that verifies here verifies as a whole.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Malformed`] if the chain is empty or two consecutive certificates do not link,
+    /// and whatever [`verify`](Self::verify) or [`verify_with`](Self::verify_with) reports
+    /// otherwise.
+    pub fn verify_chain(chain: &[Self]) -> Result<()> {
+        let (first, rest) = chain
+            .split_first()
+            .ok_or_else(|| malformed("an empty chain verifies nothing"))?;
+        first.verify()?;
+        let mut issuer = first;
+        for cert in rest {
+            if cert.issuer_key_id != issuer.subject_key_id {
+                return Err(malformed(
+                    "chain is broken: a certificate names an issuer the one above does not certify",
+                ));
+            }
+            cert.verify_with(&issuer.public_key)?;
+            issuer = cert;
+        }
+        Ok(())
+    }
+
+    /// Check the certificate against a CA key you supply.
+    ///
+    /// The signature is PKCS #1 v1.5 with SHA-256 over the body — the two key identifiers followed
+    /// by the certified public key, exactly the 297 bytes of [`signed_data`](Self::signed_data).
+    ///
+    /// The CA key does not come from the card, and the whole security of the 券面 protocol rests
+    /// on where it does come from: a certificate checked against a key taken off the same card
+    /// proves nothing at all.
+    pub fn verify_with(&self, ca_key: &RsaPublicKey) -> Result<()> {
+        ca_key.verify_pkcs1_sha256(&self.signed_data, &self.signature)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -784,162 +941,5 @@ mod tests {
         assert!(check_offsets(&[], &[0x00, 0x0E, 0x00, 0x20], &[14, 32]).is_ok());
         assert!(check_offsets(&[], &[0x00, 0x0E, 0x00, 0x20], &[14, 33]).is_err());
         assert!(check_offsets(&[], &[0x00, 0x0E], &[14, 32]).is_err());
-    }
-}
-
-/// Build the PKCS #1 v1.5 `DigestInfo` for a SHA-256 digest.
-///
-/// ```text
-/// 30 <len> 30 0D 06 09 60 86 48 01 65 03 04 02 01 05 00 04 <n> <digest>
-/// ```
-///
-/// `digest` is normally 32 bytes, but the card face record of 券面事項確認AP `0002` puts three
-/// concatenated SHA-256 digests in one `DigestInfo` and declares the length accordingly — so the
-/// length is taken from what is passed rather than fixed.
-pub fn sha256_digest_info(digest: &[u8]) -> Vec<u8> {
-    const ALGORITHM: [u8; 15] = [
-        0x30, 0x0D, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00,
-    ];
-    let inner = ALGORITHM.len() + 2 + digest.len();
-    let mut out = vec![0x30];
-    if inner < 0x80 {
-        out.push(inner as u8);
-    } else {
-        out.push(0x81);
-        out.push(inner as u8);
-    }
-    out.extend_from_slice(&ALGORITHM);
-    out.push(0x04);
-    out.push(digest.len() as u8);
-    out.extend_from_slice(digest);
-    out
-}
-
-#[cfg(feature = "verify")]
-impl RsaPublicKey {
-    fn to_rsa(&self) -> Result<rsa::RsaPublicKey> {
-        rsa::RsaPublicKey::new(
-            rsa::BigUint::from_bytes_be(&self.modulus),
-            rsa::BigUint::from_bytes_be(&self.exponent),
-        )
-        .map_err(|_| Error::SignatureInvalid("the public key is not usable"))
-    }
-
-    /// Verify a PKCS #1 v1.5 signature whose payload is `digest_info`, byte for byte.
-    ///
-    /// The padding is checked in full — this is not a search for the payload inside the block —
-    /// so a signature with anything appended is rejected.
-    pub fn verify_pkcs1(&self, digest_info: &[u8], signature: &[u8]) -> Result<()> {
-        self.to_rsa()?
-            .verify(rsa::Pkcs1v15Sign::new_unprefixed(), digest_info, signature)
-            .map_err(|_| Error::SignatureInvalid("PKCS #1 v1.5 signature does not verify"))
-    }
-
-    /// Verify a PKCS #1 v1.5 signature over the SHA-256 of `message`.
-    pub fn verify_pkcs1_sha256(&self, message: &[u8], signature: &[u8]) -> Result<()> {
-        use sha2::Digest as _;
-        let digest = sha2::Sha256::digest(message);
-        self.verify_pkcs1(&sha256_digest_info(&digest), signature)
-    }
-
-    /// Verify an RSASSA-PSS signature over the SHA-256 of `message`.
-    pub fn verify_pss_sha256(&self, message: &[u8], signature: &[u8]) -> Result<()> {
-        use sha2::Digest as _;
-        self.verify_pss_prehashed(&sha2::Sha256::digest(message), signature)
-    }
-
-    /// Verify an RSASSA-PSS signature over a SHA-256 digest you already have.
-    pub fn verify_pss_prehashed(&self, digest: &[u8], signature: &[u8]) -> Result<()> {
-        self.to_rsa()?
-            .verify(rsa::Pss::new::<sha2::Sha256>(), digest, signature)
-            .map_err(|_| Error::SignatureInvalid("PSS signature does not verify"))
-    }
-}
-
-/// SHA-256 of `data`.
-#[cfg(feature = "verify")]
-pub fn sha256(data: &[u8]) -> [u8; 32] {
-    use sha2::Digest as _;
-    sha2::Sha256::digest(data).into()
-}
-
-#[cfg(all(test, feature = "verify"))]
-mod verify_tests {
-    use super::*;
-
-    #[test]
-    fn builds_digest_infos_of_both_lengths() {
-        // The ordinary one: 32 byte digest, 49 byte structure.
-        let one = sha256_digest_info(&[0xAA; 32]);
-        assert_eq!(&one[..2], &[0x30, 0x31]);
-        assert_eq!(&one[17..19], &[0x04, 0x20]);
-        assert_eq!(one.len(), 51);
-
-        // The card face record declares three concatenated digests in one DigestInfo.
-        let three = sha256_digest_info(&[0xAA; 96]);
-        assert_eq!(&three[..2], &[0x30, 0x71]);
-        assert_eq!(&three[17..19], &[0x04, 0x60]);
-        assert_eq!(three.len(), 115);
-    }
-}
-
-#[cfg(feature = "verify")]
-impl CardVerifiableCertificate {
-    /// Check the certificate against the CA key its [`issuer_key_id`](Self::issuer_key_id) names.
-    ///
-    /// The key is looked up in [`crate::ca`], which carries the two production keys. To supply one
-    /// yourself instead, use [`verify_with`](Self::verify_with).
-    ///
-    /// # Errors
-    ///
-    /// [`Error::UnknownCertificateAuthority`] if no key is known for that identifier — which is
-    /// what a test card gets, since its certificates are issued under `"6000023"`/`"6000033"`.
-    /// Nothing is checked in that case; it is not a signature failure.
-    pub fn verify(&self) -> Result<()> {
-        let ca = crate::ca::find(&self.issuer_key_id)
-            .ok_or(Error::UnknownCertificateAuthority(self.issuer_key_id))?;
-        self.verify_with(&ca.to_public_key())
-    }
-
-    /// Check a chain: the first certificate against [`crate::ca`], each later one against the key
-    /// the certificate before it certifies.
-    ///
-    /// This is what makes the master file chain self-contained — only its root needs a key that
-    /// did not come off the card. The links are checked in order and the first failure is
-    /// returned, so a chain that verifies here verifies as a whole.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Malformed`] if the chain is empty or two consecutive certificates do not link,
-    /// and whatever [`verify`](Self::verify) or [`verify_with`](Self::verify_with) reports
-    /// otherwise.
-    pub fn verify_chain(chain: &[Self]) -> Result<()> {
-        let (first, rest) = chain
-            .split_first()
-            .ok_or_else(|| malformed("an empty chain verifies nothing"))?;
-        first.verify()?;
-        let mut issuer = first;
-        for cert in rest {
-            if cert.issuer_key_id != issuer.subject_key_id {
-                return Err(malformed(
-                    "chain is broken: a certificate names an issuer the one above does not certify",
-                ));
-            }
-            cert.verify_with(&issuer.public_key)?;
-            issuer = cert;
-        }
-        Ok(())
-    }
-
-    /// Check the certificate against a CA key you supply.
-    ///
-    /// The signature is PKCS #1 v1.5 with SHA-256 over the body — the two key identifiers followed
-    /// by the certified public key, exactly the 297 bytes of [`signed_data`](Self::signed_data).
-    ///
-    /// The CA key does not come from the card, and the whole security of the 券面 protocol rests
-    /// on where it does come from: a certificate checked against a key taken off the same card
-    /// proves nothing at all.
-    pub fn verify_with(&self, ca_key: &RsaPublicKey) -> Result<()> {
-        ca_key.verify_pkcs1_sha256(&self.signed_data, &self.signature)
     }
 }
