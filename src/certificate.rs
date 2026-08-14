@@ -51,8 +51,8 @@ impl Certificate {
     pub fn public_key(&self) -> Result<RsaPublicKey> {
         let bits = self
             .inner
-            .tbs_certificate
-            .subject_public_key_info
+            .tbs_certificate()
+            .subject_public_key_info()
             .subject_public_key
             .as_bytes()
             .ok_or_else(|| malformed("subject public key is not a whole number of bytes"))?;
@@ -70,17 +70,21 @@ impl Certificate {
 
     /// Subject distinguished name, rendered.
     pub fn subject(&self) -> String {
-        self.inner.tbs_certificate.subject.to_string()
+        self.inner.tbs_certificate().subject().to_string()
     }
 
     /// Issuer distinguished name, rendered.
     pub fn issuer(&self) -> String {
-        self.inner.tbs_certificate.issuer.to_string()
+        self.inner.tbs_certificate().issuer().to_string()
     }
 
     /// Serial number, big-endian.
     pub fn serial_number(&self) -> Vec<u8> {
-        self.inner.tbs_certificate.serial_number.as_bytes().to_vec()
+        self.inner
+            .tbs_certificate()
+            .serial_number()
+            .as_bytes()
+            .to_vec()
     }
 
     /// The validity period, as dates.
@@ -88,7 +92,7 @@ impl Certificate {
     /// The times of day are dropped; the card's certificates run to a whole second but nothing
     /// here needs that precision.
     pub fn validity(&self) -> (Date, Date) {
-        let v = &self.inner.tbs_certificate.validity;
+        let v = self.inner.tbs_certificate().validity();
         (
             Date::from_unix_seconds(v.not_before.to_unix_duration().as_secs() as i64),
             Date::from_unix_seconds(v.not_after.to_unix_duration().as_secs() as i64),
@@ -105,7 +109,7 @@ impl Certificate {
 
     /// The algorithm the certificate itself is signed with, as a dotted OID.
     pub fn signature_algorithm(&self) -> String {
-        self.inner.signature_algorithm.oid.to_string()
+        self.inner.signature_algorithm().oid.to_string()
     }
 }
 
@@ -401,12 +405,12 @@ impl Certificate {
         }
         let tbs = self
             .inner
-            .tbs_certificate
+            .tbs_certificate()
             .to_der()
             .map_err(|_| malformed("re-encoding the TBSCertificate failed"))?;
         let signature = self
             .inner
-            .signature
+            .signature()
             .as_bytes()
             .ok_or_else(|| malformed("signature is not a whole number of bytes"))?;
         issuer.public_key()?.verify_pkcs1_sha256(&tbs, signature)

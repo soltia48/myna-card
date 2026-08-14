@@ -676,21 +676,21 @@ impl RsaPublicKey {
 
     /// Verify a PKCS #1 v1.5 signature over the SHA-256 of `message`.
     pub fn verify_pkcs1_sha256(&self, message: &[u8], signature: &[u8]) -> Result<()> {
-        use sha2::Digest as _;
-        let digest = sha2::Sha256::digest(message);
+        use rsa::sha2::Digest as _;
+        let digest = rsa::sha2::Sha256::digest(message);
         self.verify_pkcs1(&sha256_digest_info(&digest), signature)
     }
 
     /// Verify an RSASSA-PSS signature over the SHA-256 of `message`.
     pub fn verify_pss_sha256(&self, message: &[u8], signature: &[u8]) -> Result<()> {
-        use sha2::Digest as _;
-        self.verify_pss_prehashed(&sha2::Sha256::digest(message), signature)
+        use rsa::sha2::Digest as _;
+        self.verify_pss_prehashed(&rsa::sha2::Sha256::digest(message), signature)
     }
 
     /// Verify an RSASSA-PSS signature over a SHA-256 digest you already have.
     pub fn verify_pss_prehashed(&self, digest: &[u8], signature: &[u8]) -> Result<()> {
         self.to_rsa()?
-            .verify(rsa::Pss::new::<sha2::Sha256>(), digest, signature)
+            .verify(rsa::Pss::new::<rsa::sha2::Sha256>(), digest, signature)
             .map_err(|_| Error::SignatureInvalid("PSS signature does not verify"))
     }
 }
@@ -698,8 +698,8 @@ impl RsaPublicKey {
 /// SHA-256 of `data`.
 #[cfg(feature = "verify")]
 pub fn sha256(data: &[u8]) -> [u8; 32] {
-    use sha2::Digest as _;
-    sha2::Sha256::digest(data).into()
+    use rsa::sha2::Digest as _;
+    rsa::sha2::Sha256::digest(data).into()
 }
 
 #[cfg(all(test, feature = "verify"))]

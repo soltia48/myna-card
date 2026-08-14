@@ -18,10 +18,15 @@ all-features = true
 
 [dependencies]
 pcsc = { version = "2.9", optional = true }
-rsa = { version = "0.9", optional = true }
-sha2 = { version = "0.10", optional = true }
+# SHA-2 comes from `rsa::sha2` rather than a `sha2` entry of its own. The two have to agree on a
+# `digest` version or `rsa::Pss::new::<Sha256>()` stops compiling, and taking sha2 from rsa is what
+# keeps them in step: a sha2 that rsa cannot use is one cargo will not resolve.
+rsa = { version = "0.9", optional = true, features = ["sha2"] }
 thiserror = "2"
-x509-cert = { version = "0.2", optional = true }
+# `Certificate::inner` hands out an `x509_cert::Certificate`, so this version is part of this
+# crate's own API. 0.3 brings its own `der`/`const-oid`/`spki` majors, which for now sit alongside
+# the ones `rsa` 0.9 uses — nothing is passed between the two, only re-encoded bytes.
+x509-cert = { version = "0.3", optional = true }
 
 [features]
 default = ["pcsc", "verify"]
@@ -29,7 +34,7 @@ default = ["pcsc", "verify"]
 pcsc = ["dep:pcsc"]
 # Signature verification. Pulls in an RSA implementation and SHA-2; turn it off if you only need
 # to read the card and will check signatures elsewhere.
-verify = ["dep:rsa", "dep:sha2", "dep:x509-cert"]
+verify = ["dep:rsa", "dep:x509-cert"]
 # Expose the in-memory test transport to downstream crates.
 mock = []
 

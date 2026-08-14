@@ -183,6 +183,11 @@ jobs:
     name: Security advisories
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # The action reports through a check run, which the workflow-level
+    # `contents: read` does not cover.
+    permissions:
+      contents: read
+      checks: write
     steps:
       - uses: actions/checkout@v7
 
@@ -190,9 +195,21 @@ jobs:
       # and leans on an RSA implementation and an X.509 parser to do it.  An
       # advisory against any of them is something the repository should hear
       # about.
+      #
+      # RUSTSEC-2023-0071 is the exception, and it has no fix to wait for:
+      # `patched = []`, because the constant-time rewrite of `rsa` has not
+      # landed.  It is the Marvin attack — a timing sidechannel that leaks an
+      # RSA *private* key through operations that use one.  This crate never
+      # has a private key to leak: `data::RsaPublicKey::to_rsa` builds an
+      # `rsa::RsaPublicKey` and the only calls made on it are `verify`.  Every
+      # signature this crate produces is produced by the card, from a key that
+      # cannot be extracted from it, over an APDU (`ap::jpki::JpkiAp::sign`).
+      # Drop this line if the crate ever performs a private-key operation in
+      # process.
       - uses: rustsec/audit-check@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          ignore: RUSTSEC-2023-0071
 
   package:
     name: Package
