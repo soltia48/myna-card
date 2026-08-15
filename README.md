@@ -48,9 +48,11 @@ sent; the unit tests in `card.rs` and `ap/jpki.rs` show the pattern.
 
 ```rust
 use myna_card::ap::jpki::{JpkiAp, SignatureScheme};
+use myna_card::transport::pcsc::Sharing;
 use myna_card::{Pin, transport::pcsc};
 
-let mut card = pcsc::connect_any()?;
+// Exclusive because this presents a PIN — see below.
+let mut card = pcsc::connect_any(Sharing::Exclusive)?;
 let mut jpki = JpkiAp::select(&mut card)?;
 
 // Readable without a password.
@@ -60,6 +62,31 @@ let cert = jpki.read_auth_certificate()?;
 jpki.verify_auth_pin(&Pin::numeric("1234")?)?;
 let signature = jpki.sign_with_auth_key(SignatureScheme::Sha256DigestInfo, message)?;
 ```
+
+### Who else may hold the card
+
+Every connection says whether anything else may hold the card at the same time. There is no
+default, because the answer follows from what the program is about to do and the wrong one fails
+quietly in either direction.
+
+`Sharing::Shared` is the PC/SC default and the right one for reading: several programs can ask a
+card what it is at once without disturbing each other.
+
+Signing is different. A successful VERIFY stays in effect until the card leaves the field, so
+between presenting a PIN and powering the card down, any other process on the machine can sign with
+the key you unlocked — without knowing the PIN. `Sharing::Exclusive` closes that window:
+
+```rust
+use myna_card::transport::pcsc::{self, Sharing};
+
+let mut card = pcsc::connect_any(Sharing::Exclusive)?;
+```
+
+Nothing else can hold the card until that connection is dropped, and `power_cycle` reconnects on the
+same terms rather than quietly giving the reservation up. Connecting fails with
+`pcsc::Error::SharingViolation` if something already has the card — the holder keeps it, so this is
+a reservation to take when the key needs it and release as soon as you are done. What it locks out
+is the card's other legitimate users.
 
 ### Signing
 

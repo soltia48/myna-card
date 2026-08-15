@@ -7,12 +7,13 @@ use std::path::PathBuf;
 
 use myna_card::ap::jpki::JpkiAp;
 use myna_card::certificate::roots::Accept;
+use myna_card::transport::pcsc::Sharing;
 use myna_card::{Retries, transport::pcsc};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let out_dir = PathBuf::from(std::env::args().nth(1).unwrap_or_else(|| ".".to_owned()));
 
-    let mut card = pcsc::connect_any()?;
+    let mut card = pcsc::connect_any(Sharing::Shared)?;
     let mut jpki = JpkiAp::select(&mut card)?;
 
     // Tells a card apart from the mobile certificate in a phone, which speaks the same protocol.

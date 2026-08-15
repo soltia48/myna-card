@@ -4,7 +4,7 @@
 
 use myna_card::ap::common::CommonAp;
 use myna_card::ap::jpki::JpkiAp;
-use myna_card::transport::pcsc;
+use myna_card::transport::pcsc::{self, Sharing};
 
 fn main() -> Result<(), myna_card::Error> {
     let readers = pcsc::list_readers()?;
@@ -19,7 +19,7 @@ fn main() -> Result<(), myna_card::Error> {
 
     // A reader with nothing on it, or with something that is not an Individual Number Card, is an
     // ordinary outcome here rather than an error — so say which it is instead of failing.
-    let mut card = match pcsc::connect_any() {
+    let mut card = match pcsc::connect_any(Sharing::Shared) {
         Ok(card) => card,
         Err(err) => {
             println!("no card to talk to: {err}");

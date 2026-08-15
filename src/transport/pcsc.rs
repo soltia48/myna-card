@@ -16,54 +16,116 @@ pub fn list_readers() -> Result<Vec<String>> {
         .collect())
 }
 
+/// Whether anything else may hold the card while this connection is open.
+///
+/// PC/SC lets several processes hold one card at once, and for reading that is the right default:
+/// two programs can each ask the card what it is without getting in each other's way.
+///
+/// It is the wrong default for signing. A successful VERIFY stays in effect until the card leaves
+/// the field — see [`PcscTransport::power_cycle`] — so between presenting a PIN and powering the
+/// card down, anything else on the machine can use the key this connection unlocked, without
+/// knowing the PIN. [`Sharing::Exclusive`] is what closes that window.
+///
+/// There is deliberately no [`Default`]. Which of these a program wants follows from what it is
+/// about to do with the card, and the wrong one fails silently in opposite directions: sharing
+/// when signing leaves the key open to the rest of the machine, and holding the card alone when
+/// only reading locks out software the person at the keyboard is relying on. Neither shows up in
+/// testing. Every connection says which it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sharing {
+    /// Other processes may hold the same card at the same time. The PC/SC default.
+    Shared,
+    /// Nothing else may hold the card until this connection is dropped.
+    ///
+    /// This reserves the card rather than the key: it keeps other software away from a security
+    /// status this connection established, and it does so for as long as the connection lives. The
+    /// software being kept away is the card's other legitimate users, so hold the reservation for
+    /// as long as the key needs it and no longer.
+    ///
+    /// It is not a lock the card enforces, and it protects nothing the card is not currently in a
+    /// reader for. Something already holding the card keeps it — connecting is what fails.
+    Exclusive,
+}
+
+impl Sharing {
+    fn mode(self) -> ::pcsc::ShareMode {
+        match self {
+            Sharing::Shared => ::pcsc::ShareMode::Shared,
+            Sharing::Exclusive => ::pcsc::ShareMode::Exclusive,
+        }
+    }
+}
+
 /// Connect to the card in the first available reader.
 ///
 /// # Errors
 ///
-/// Returns [`Error::NoReader`] if no reader is present.
-pub fn connect_any() -> Result<Card<PcscTransport>> {
+/// Returns [`Error::NoReader`] if no reader is present, and
+/// [`Error::Pcsc`]\([`SharingViolation`](::pcsc::Error::SharingViolation)) if `sharing` is
+/// [`Sharing::Exclusive`] and something else is already holding the card.
+pub fn connect_any(sharing: Sharing) -> Result<Card<PcscTransport>> {
     let context = ::pcsc::Context::establish(::pcsc::Scope::User)?;
     let reader = context
         .list_readers_owned()?
         .into_iter()
         .next()
         .ok_or(Error::NoReader)?;
-    connect_with(context, &reader)
+    open(&context, &reader, sharing)
 }
 
 /// Connect to the card in the reader with the given name.
 ///
 /// # Errors
 ///
-/// Returns [`Error::ReaderNotFound`] if no reader has that name.
-pub fn connect(reader: &str) -> Result<Card<PcscTransport>> {
+/// Returns [`Error::ReaderNotFound`] if no reader has that name, and
+/// [`Error::Pcsc`]\([`SharingViolation`](::pcsc::Error::SharingViolation)) if `sharing` is
+/// [`Sharing::Exclusive`] and something else is already holding the card.
+pub fn connect(reader: &str, sharing: Sharing) -> Result<Card<PcscTransport>> {
     let context = ::pcsc::Context::establish(::pcsc::Scope::User)?;
     let name = context
         .list_readers_owned()?
         .into_iter()
         .find(|name| name.to_string_lossy() == reader)
         .ok_or_else(|| Error::ReaderNotFound(reader.to_owned()))?;
-    connect_with(context, &name)
+    open(&context, &name, sharing)
 }
 
-fn connect_with(context: ::pcsc::Context, reader: &CString) -> Result<Card<PcscTransport>> {
-    let card = context.connect(reader, ::pcsc::ShareMode::Shared, ::pcsc::Protocols::ANY)?;
-    Ok(Card::new(PcscTransport::new(card)))
+fn open(
+    context: &::pcsc::Context,
+    reader: &CString,
+    sharing: Sharing,
+) -> Result<Card<PcscTransport>> {
+    let card = context.connect(reader, sharing.mode(), ::pcsc::Protocols::ANY)?;
+    Ok(Card::new(PcscTransport::new(card, sharing)))
 }
 
 /// A [`Transmit`] implementation backed by a PC/SC connection.
 pub struct PcscTransport {
     card: ::pcsc::Card,
     buffer: Vec<u8>,
+    /// What the card was connected as, so that [`Self::power_cycle`] can reconnect it the same
+    /// way. Reconnecting is a fresh `SCardReconnect` and takes a share mode of its own; taking
+    /// the shared one there would drop an exclusive reservation in the middle of holding it.
+    sharing: Sharing,
 }
 
 impl PcscTransport {
     /// Wrap an already connected PC/SC card.
-    pub fn new(card: ::pcsc::Card) -> Self {
+    ///
+    /// `sharing` is how the card was connected, not a request: it is what
+    /// [`power_cycle`](Self::power_cycle) reconnects with, so a value that disagrees with the
+    /// `SCardConnect` behind `card` is how an exclusive reservation gets handed back mid-session.
+    pub fn new(card: ::pcsc::Card, sharing: Sharing) -> Self {
         PcscTransport {
             card,
             buffer: vec![0; ::pcsc::MAX_BUFFER_SIZE_EXTENDED],
+            sharing,
         }
+    }
+
+    /// How this connection is shared with anything else that talks to the card.
+    pub fn sharing(&self) -> Sharing {
+        self.sharing
     }
 
     /// The underlying PC/SC card, for operations this crate does not cover.
@@ -83,7 +145,7 @@ impl PcscTransport {
     /// would have to know that.
     pub fn power_cycle(&mut self) -> Result<()> {
         self.card.reconnect(
-            ::pcsc::ShareMode::Shared,
+            self.sharing.mode(),
             ::pcsc::Protocols::ANY,
             ::pcsc::Disposition::UnpowerCard,
         )?;
@@ -108,5 +170,19 @@ impl Transmit for PcscTransport {
 impl std::fmt::Debug for PcscTransport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PcscTransport").finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The mapping is the whole of what [`Sharing`] does, and reversing it fails open: a caller
+    /// that asked to be alone with the card would get a shared connection, succeed, and only find
+    /// out on a machine where something else is talking to the reader.
+    #[test]
+    fn sharing_maps_to_the_pcsc_mode_of_the_same_name() {
+        assert_eq!(Sharing::Shared.mode(), ::pcsc::ShareMode::Shared);
+        assert_eq!(Sharing::Exclusive.mode(), ::pcsc::ShareMode::Exclusive);
     }
 }

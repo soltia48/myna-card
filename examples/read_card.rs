@@ -25,6 +25,7 @@ use myna_card::ap::{common::CommonAp, jpki::JpkiAp, surface::SurfaceAp, text::Te
 use myna_card::certificate::roots::Accept;
 use myna_card::data::CardVerifiableCertificate;
 use myna_card::mf::{self, MasterFile};
+use myna_card::transport::pcsc::Sharing;
 use myna_card::{Pin, Retries, transport::pcsc};
 
 /// Render a check as a short tag, so a failure is visible without stopping the run.
@@ -47,7 +48,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // and nothing signs either of them.
     let municipality;
 
-    let mut card = pcsc::connect_any()?;
+    let mut card = pcsc::connect_any(Sharing::Shared)?;
 
     // The master file level answers only while no application is selected, so it goes first — and
     // a power cycle is what puts the card back in that state.

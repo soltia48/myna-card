@@ -27,9 +27,12 @@
 //! # #[cfg(all(feature = "pcsc", feature = "verify"))]
 //! # fn main() -> Result<(), myna_card::Error> {
 //! use myna_card::ap::jpki::{JpkiAp, SignatureScheme};
+//! use myna_card::transport::pcsc::Sharing;
 //! use myna_card::{Pin, transport::pcsc};
 //!
-//! let mut card = pcsc::connect_any()?;
+//! // Exclusive because this presents a PIN: a security status outlives the command that set it,
+//! // and sharing the card would leave the unlocked key to whatever else is on the machine.
+//! let mut card = pcsc::connect_any(Sharing::Exclusive)?;
 //! let mut jpki = JpkiAp::select(&mut card)?;
 //!
 //! // The 利用者証明用証明書 is readable without a password.
