@@ -3,6 +3,11 @@
 //! The least understood of the five. It exposes one record structured EF whose content has not
 //! been identified, and a key reference whose verification does not visibly change the security
 //! status of anything else in the application.
+//!
+//! No secure messaging reachable from here. SET SESSION KEY answers `6982` even with the PIN
+//! presented, and this application publishes no key to deliver a session key under. Unlike the
+//! `66F1` of the 共通カード and 券面事項確認 applications, `6982` says the card *has* something
+//! configured and the credential is not it. See [`crate::sm`].
 
 use crate::card::{Card, Retries};
 use crate::error::Result;

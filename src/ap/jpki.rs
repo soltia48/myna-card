@@ -8,6 +8,11 @@
 //!
 //! Both certificates can be read without presenting anything, but the CA certificates and the
 //! keys follow the access rules of their key references.
+//!
+//! No secure messaging reachable from here. SET SESSION KEY answers `6982` with both the user
+//! authentication PIN and the signature password presented, and `CLA=08` on a read answers `69FC`.
+//! What this application returns is a certificate or a signature — public values — so there is
+//! little for a session to protect. See [`crate::sm`].
 
 use crate::apdu::Command;
 use crate::card::{Card, Retries, ShortEfId, ins};

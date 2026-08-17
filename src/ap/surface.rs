@@ -7,6 +7,17 @@
 //! Three keys open three different amounts, and the amount tracks how much the terminal already
 //! knows: the 生年月日 alone opens the age verification record, 照合番号B opens the card face, and
 //! 照合番号A opens the card face plus the rendered 個人番号.
+//!
+//! Measured, the three open exactly that much and no more: 照合番号A reaches `0002` `0003` `0004`
+//! `0005` `0006`, and 照合番号B the same set without `0005`.
+//!
+//! No secure messaging, so the 照合番号 that open this application travel in the clear. SET SESSION
+//! KEY answers `66F1`, the same as the 共通カードAP: nothing is configured to deliver a session key
+//! to, and no credential changes that. The rendered 個人番号 of EF `0005` is therefore readable off
+//! the interface by anyone who watches a legitimate exchange.
+//!
+//! EF `0002` also carries the expiry, which is ten of the fourteen digits of 照合番号B once the
+//! date of birth is counted — see [`verification_code_b`](crate::data::verification_code_b). See [`crate::sm`].
 
 use crate::card::{Card, Retries};
 use crate::data::{

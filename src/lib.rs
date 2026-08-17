@@ -10,6 +10,7 @@
 //! - [`ca`] — CA keys for the 券面 card-verifiable certificates, and where they came from.
 //! - [`certificate`] — the X.509 certificates of the 公的個人認証AP.
 //! - [`mf`] — the files under the master file that the JICSAP specification itself defines.
+//! - [`sm`] — secure messaging with the 券面入力補助AP, the one application that offers it.
 //! - [`tlv`] — readers for the two TLV encodings the card uses.
 //!
 //! # Specification
@@ -82,6 +83,8 @@ pub mod data;
 pub mod error;
 pub mod mf;
 pub mod pin;
+#[cfg(feature = "sm")]
+pub mod sm;
 pub mod tlv;
 pub mod transport;
 
@@ -97,4 +100,6 @@ pub use data::{
 pub use error::{Error, Result};
 pub use mf::MasterFile;
 pub use pin::Pin;
+#[cfg(feature = "sm")]
+pub use sm::SecureSession;
 pub use transport::Transmit;

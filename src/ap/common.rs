@@ -6,6 +6,10 @@
 //! Record 1 of EF 0001 carries the card's own identity: a serial number, the prefecture and
 //! municipality codes of the issuer, and the expiry date. EF 0002 matches EF 0002 of the 住基
 //! application, whose content is not yet understood.
+//!
+//! No secure messaging. SET SESSION KEY answers `66F1`, "the security environment itself is
+//! faulty" — there is no key delivery configured here to satisfy, so presenting more credentials
+//! does not change it. See [`crate::sm`].
 
 use crate::card::{Card, Retries, ShortEfId};
 use crate::data::{Date, malformed};

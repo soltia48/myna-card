@@ -17,6 +17,10 @@ exclude = [".github/"]
 all-features = true
 
 [dependencies]
+# AES-128-CBC, for the secure messaging of the 券面入力補助AP. Encryption only: that application
+# delivers no CCS key, so there is no MAC to compute.
+aes = { version = "0.8", optional = true }
+cbc = { version = "0.1", optional = true }
 pcsc = { version = "2.9", optional = true }
 # SHA-2 comes from `rsa::sha2` rather than a `sha2` entry of its own. The two have to agree on a
 # `digest` version or `rsa::Pss::new::<Sha256>()` stops compiling, and taking sha2 from rsa is what
@@ -35,6 +39,9 @@ pcsc = ["dep:pcsc"]
 # Signature verification. Pulls in an RSA implementation and SHA-2; turn it off if you only need
 # to read the card and will check signatures elsewhere.
 verify = ["dep:rsa", "dep:x509-cert"]
+# Secure messaging with the 券面入力補助AP. Needs `verify` for the RSA it delivers the session key
+# under, and adds an AES-128 implementation of its own.
+sm = ["dep:aes", "dep:cbc", "verify"]
 # Expose the in-memory test transport to downstream crates.
 mock = []
 
@@ -52,3 +59,7 @@ required-features = ["pcsc"]
 [[example]]
 name = "read_card"
 required-features = ["pcsc", "verify"]
+
+[[example]]
+name = "secure_messaging"
+required-features = ["pcsc", "sm"]

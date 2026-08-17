@@ -19,6 +19,7 @@ each application's `read_ef`.
 
 ```
 ap::{common, juki, surface, text, jpki}   which application owns which file, and its access rules
+sm::SecureSession                         secure messaging with the 券面入力補助AP (feature `sm`)
 mf::MasterFile                            the master file level: GET DATA objects, and the
                                           files JICSAP defines there (001E, 2F10, 2F11)
 card::Card                                SELECT FILE, READ BINARY, READ RECORD, VERIFY, GET DATA
@@ -87,6 +88,37 @@ same terms rather than quietly giving the reservation up. Connecting fails with
 `pcsc::Error::SharingViolation` if something already has the card — the holder keeps it, so this is
 a reservation to take when the key needs it and release as soon as you are done. What it locks out
 is the card's other legitimate users.
+
+### Secure messaging
+
+One application offers it, and only one. The 券面入力補助AP publishes an RSA public key in EF
+`0006`; a terminal encrypts a session key to it with SET SESSION KEY, and afterwards command and
+response data travel under AES-128-CBC. Behind the `sm` feature, which is off by default.
+
+```rust
+let mut text = TextAp::select(&mut card)?;
+text.verify_pin(&Pin::numeric("1234")?)?;          // in the clear — see below
+
+let mut seed = [0u8; myna_card::sm::SEED_LEN];     // from a CSPRNG, fresh per session
+rsa::rand_core::RngCore::fill_bytes(&mut rsa::rand_core::OsRng, &mut seed);
+let mut session = text.open_secure_session(&seed)?;
+
+session.verify(ef::CODE_A, &code_a)?;              // 照合番号A, encrypted
+let my_number = session.read_ef(ef::MY_NUMBER)?;   // and the file it opens
+```
+
+**It cannot protect the PIN.** The card will not deliver a session key until the PIN has been
+presented in the clear: with nothing presented SET SESSION KEY answers `6982`, and presenting
+照合番号A instead — which the card accepts — leaves it at `6982`. The ordering is closed, so treat
+the PIN as exposed to anything listening whether or not a session follows.
+
+What it does protect is what comes after, and one thing in particular: 照合番号A *is* the 個人番号,
+so presenting it inside a session keeps the number itself off the interface. The 券面事項確認AP has
+no equivalent, which is why the 照合番号 that open it are unavoidably in the clear.
+
+There is no integrity, only confidentiality — see "Not implemented yet".
+
+`examples/secure_messaging.rs` runs the whole sequence against a card.
 
 ### Signing
 
@@ -218,10 +250,18 @@ every attempt after that. A key with no retry limit answers `6300` and never rep
 - The files that stay unidentified: 公的個人認証AP `0009`, 券面事項確認AP `0006` and
   券面入力補助AP `0008` — both sixteen `FF` bytes — and the trailing 128 bytes of 券面入力補助AP
   `0005`.
-- Secure messaging (JICSAP 5.3) and the extended system commands. The card refuses every secure
-  messaging class byte — 6882 to SELECT FILE, and 69FC to READ BINARY and VERIFY under `08` and
-  `0C` — so there is nothing on the other side to talk to; the extended commands' instruction bytes
-  are in `card::ins` but none of them helps read a card.
+- 券面入力補助AP `0012`, a key reference that arrives blocked with zero attempts left. It answers
+  the non-consuming query `63C0` and a VERIFY `6984`. No file was found that it opens.
+- Integrity-protected secure messaging. `CLA=0C` needs a CCS key, and the one application that
+  offers secure messaging will not accept one: SET SESSION KEY takes `A0 { 80 : … }` and answers
+  `6A80` to the forms carrying `81`. Confidentiality is implemented — see `sm` — but there is no
+  MAC to be had, so an active attacker on the interface can corrupt a command even though they
+  cannot read one.
+- Secure messaging on the other four applications, because they do not offer it. 共通カードAP and
+  券面事項確認AP answer SET SESSION KEY `66F1`, 公的個人認証AP and 住基AP answer `6982` with every
+  credential this crate can present. None answers `6D00`, so the instruction exists card-wide.
+- The remaining extended system commands. Their instruction bytes are in `card::ins`, but none of
+  them helps read a card.
 - Answer-to-Reset parsing (JICSAP 3.2). There is nothing to parse on this card: the contact ATR,
   which the card will hand over through GET DATA, declares zero historical bytes.
 

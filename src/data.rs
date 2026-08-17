@@ -197,6 +197,18 @@ impl fmt::Debug for MyNumber {
 /// the card expires, and the four digit security code. Confirmed on a card — a date of birth of
 /// 1980-02-17 (昭和55) with an expiry in 2035 and security code `2285` gives `55021720352285`.
 ///
+/// # Only four of the fourteen digits are off the chip
+///
+/// 照合番号A opens 券面事項確認AP `0002`, and that file carries both the date of birth and the
+/// expiry — the first ten digits of this value, confirmed by reading `2035` out of it on the card
+/// the example above comes from. A party holding 照合番号A, which is the 個人番号, therefore has
+/// everything here but the security code, and that is four digits against a counter of ten
+/// attempts.
+///
+/// The consequence is smaller than it first sounds, because 照合番号A already opens the rendered
+/// card face: what 照合番号B adds is the 基本4情報 as UTF-8 rather than as an image of the same
+/// fields. It is worth knowing all the same that the two 照合番号 are not independent secrets.
+///
 /// # Errors
 ///
 /// Returns [`Error::Malformed`] if the date of birth predates the Meiji era or its era year
@@ -685,6 +697,20 @@ impl RsaPublicKey {
     pub fn verify_pss_sha256(&self, message: &[u8], signature: &[u8]) -> Result<()> {
         use rsa::sha2::Digest as _;
         self.verify_pss_prehashed(&rsa::sha2::Sha256::digest(message), signature)
+    }
+
+    /// Encrypt `message` with RSAES-OAEP and SHA-256, both as the digest and in MGF1.
+    ///
+    /// Used to hand a session key to the 券面入力補助AP. The card's own answer distinguishes a
+    /// ciphertext at or above the modulus (`6F00`) from one below it (`6A80` when the plaintext is
+    /// not what it wanted), which is a property of its input range check rather than a leak: the
+    /// modulus is in EF `0006` for anyone to read.
+    #[cfg(feature = "sm")]
+    pub fn encrypt_oaep_sha256(&self, message: &[u8]) -> Result<Vec<u8>> {
+        use rsa::rand_core::OsRng;
+        self.to_rsa()?
+            .encrypt(&mut OsRng, rsa::Oaep::new::<rsa::sha2::Sha256>(), message)
+            .map_err(|_| Error::SignatureInvalid("OAEP encryption failed"))
     }
 
     /// Verify an RSASSA-PSS signature over a SHA-256 digest you already have.
