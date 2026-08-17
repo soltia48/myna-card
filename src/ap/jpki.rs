@@ -38,7 +38,7 @@ pub mod ef {
     /// [`CertificateAvailability`](super::CertificateAvailability).
     pub const CERTIFICATE_AVAILABILITY: u16 = 0x0008;
     /// Key reference the terminal's card-verifiable certificate is checked against, by
-    /// VERIFY CERTIFICATE. See [`crate::card::ins::VERIFY_CERTIFICATE`].
+    /// SET PUBLIC IC KEY. See [`crate::card::ins::SET_PUBLIC_IC_KEY`].
     pub const TERMINAL_CA: u16 = 0x0016;
     /// User authentication certificate (利用者証明用証明書).
     pub const AUTH_CERTIFICATE: u16 = 0x000A;

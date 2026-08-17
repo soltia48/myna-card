@@ -364,7 +364,8 @@ impl fmt::Debug for KeyId {
 /// A card-verifiable certificate, tag `7F21`.
 ///
 /// Both 券面 applications keep the card's own certificate in EF `0004` in this format, and
-/// VERIFY CERTIFICATE (`80 A2`) takes a terminal's certificate in the same shape.
+/// SET PUBLIC IC KEY (`80 A2`) takes a terminal's certificate in the same shape — that command
+/// checks it against the terminal CA key and keeps the public key inside it.
 ///
 /// ```text
 /// 7F 21 82 02 33

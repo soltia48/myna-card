@@ -41,8 +41,19 @@ pub mod ins {
     pub const GET_DATA: u8 = 0xCA;
     /// COMPUTE DIGITAL SIGNATURE. Not a JICSAP command; the JPKI application's own, CLA 80.
     pub const COMPUTE_SIGNATURE: u8 = 0x2A;
-    /// VERIFY CERTIFICATE. Not a JICSAP command; CLA 80.
-    pub const VERIFY_CERTIFICATE: u8 = 0xA2;
+    /// SET PUBLIC IC KEY. Not a JICSAP command; CLA 80.
+    ///
+    /// Named for what it does rather than for the check on the way: the terminal hands over a
+    /// card-verifiable certificate, the card verifies it against the CA key in
+    /// [`jpki::ef::TERMINAL_CA`](crate::ap::jpki::ef::TERMINAL_CA), and **keeps the public key the
+    /// certificate carries**. The effect therefore outlives the command, unlike a pure
+    /// verification would.
+    ///
+    /// The certificate body is 307 bytes, which is why [`Command`](crate::apdu::Command) needs the
+    /// extended `Lc` encoding at all. What P1 and P2 select is not established: `00 00`, `00 AE`,
+    /// `80 00` and `00 B6` all answer `6A86` on the cards examined, and nothing here has a
+    /// certificate signed by a terminal CA to complete the exchange with.
+    pub const SET_PUBLIC_IC_KEY: u8 = 0xA2;
     /// The last-command indicator, `80 FC 00 00` with no data. Not a JICSAP command; CLA 80.
     /// A reader sends it to tell the card the session is over.
     pub const LAST_COMMAND_INDICATOR: u8 = 0xFC;
