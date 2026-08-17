@@ -106,6 +106,7 @@ jobs:
           - "--no-default-features --features pcsc"
           - "--no-default-features --features verify"
           - "--no-default-features --features mock"
+          - "--no-default-features --features sm"
     steps:
       - uses: actions/checkout@v7
 
@@ -118,7 +119,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libpcsclite-dev
 
-      # Both optional features are advertised as independently droppable, and
+      # Every optional feature is advertised as independently droppable, and
       # `required-features` on the examples has to keep up with that.  Only
       # `--all-targets` builds the examples, so it is what checks that claim.
       - name: Build ${{ matrix.features }}
@@ -141,11 +142,23 @@ jobs:
             echo "no $1 in the graph"
           }
           case "${{ matrix.features }}" in
-            *"--features pcsc") absent rsa verify ;;
-            *"--features verify") absent pcsc pcsc ;;
+            *"--features pcsc")
+              absent rsa verify
+              absent aes sm
+              absent cbc sm
+              ;;
+            *"--features verify")
+              absent pcsc pcsc
+              absent aes sm
+              absent cbc sm
+              ;;
+            # `sm` pulls in `verify`, so rsa is expected here; pcsc is not.
+            *"--features sm") absent pcsc pcsc ;;
             *"--features mock"|"--no-default-features")
               absent pcsc pcsc
               absent rsa verify
+              absent aes sm
+              absent cbc sm
               ;;
           esac
 
