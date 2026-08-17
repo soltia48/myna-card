@@ -86,8 +86,11 @@ type CbcDecryptor = cbc::Decryptor<Aes128>;
 /// AES block size, and the length of the session key this application uses.
 const BLOCK: usize = 16;
 
-/// Length of the key material SET SESSION KEY carries, of which the first [`BLOCK`] bytes become
-/// the key.
+/// Length of the key material SET SESSION KEY carries.
+///
+/// The specification fixes it at 32 bytes whichever cipher is in use. With AES-128 the first 16
+/// become the session key and the remainder is unused — but all 32 still have to be unpredictable,
+/// since the card decides how many it takes.
 pub const SEED_LEN: usize = 32;
 
 /// Tag of the encrypted data object, in both directions.
