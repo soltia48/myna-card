@@ -230,14 +230,14 @@ mod card_verifiable_certificates {
 }
 
 #[test]
-fn the_ap_basic_data_carries_the_municipality_and_an_encrypted_reference_number() {
+fn the_ap_basic_data_preserves_the_municipality_and_opaque_df35() {
     let basic = myna_card::ap::surface::ApBasicData::parse(&fixture("surface-0003.bin")).unwrap();
     assert_eq!(basic.municipality_code, "13221");
     assert_eq!(basic.version, 0x00);
     assert_eq!(basic.public_key_id.to_string(), "6000024/001");
 
-    // The 照合番号 is here, encrypted to a key the issuer holds — the same one on every card seen,
-    // production and test alike.
+    // DF35 begins with a key-shaped 16 byte reference and has 256 opaque bytes after it. The
+    // algorithm, plaintext and key holder are not established by this fixture.
     assert_eq!(
         basic.encrypted_reference_number.key_id.to_string(),
         "5900025/001"

@@ -129,7 +129,7 @@ fn the_ap_basic_data_names_a_key_that_is_not_the_signing_key() {
     assert_eq!(basic.identification, [0x01, 0x03, 0x0E, 0x01]);
     assert_eq!(basic.public_key_id.to_string(), "6000034/001");
 
-    // Not the key EF 0004 certifies, which is what makes the name in the SDK misleading.
+    // Not the key EF 0004 certifies.
     let cert =
         myna_card::data::CardVerifiableCertificate::parse(&fixture("text-0004.bin")).unwrap();
     assert_ne!(basic.public_key_id, cert.subject_key_id);

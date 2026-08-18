@@ -498,9 +498,9 @@ mod tests {
 /// about to ask for a 署名用パスワード can find out first whether there is anything to sign with.
 /// The file is readable without a credential.
 ///
-/// The three bytes are `8F 8F 00` on a card carrying both. Only the first two are used by
-/// デジタル庁's own application, which names them exactly as they are named here; what the third
-/// byte means is not known, so it is kept as [`raw`](Self::raw) rather than interpreted.
+/// The three bytes are `8F 8F 00` on a card carrying both. The first two describe the signature
+/// and user-authentication certificates; what the third byte means is not known, so it is kept as
+/// [`raw`](Self::raw) rather than interpreted.
 ///
 /// `8F` is not a boolean and nothing here treats it as one. [`has_sign_certificate`] and
 /// [`has_auth_certificate`] report "not the value a card with the certificate shows", which is the
@@ -510,9 +510,9 @@ mod tests {
 /// [`has_auth_certificate`]: Self::has_auth_certificate
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CertificateAvailability {
-    /// Byte 0 — デジタル庁's `SignatureCertificateAvailability`.
+    /// Byte 0 — signature-certificate availability.
     pub sign: u8,
-    /// Byte 1 — デジタル庁's `UserAuthCertificateAvailability`.
+    /// Byte 1 — user-authentication-certificate availability.
     pub auth: u8,
     /// All three bytes as stored.
     pub raw: [u8; 3],

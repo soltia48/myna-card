@@ -179,11 +179,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         let issuer = &cert.public_key;
 
-        // Also free to read, and it repeats the municipality code. Nothing signs either copy, so
-        // the two agreeing is worth a line.
+        // Also free to read, and it repeats the municipality code. Neither copy is independently
+        // authenticated here, so the agreement is only a consistency check.
         let basic = surface.read_ap_basic_data()?;
         println!(
-            "  AP basic     municipality {}{}, 照合番号 encrypted to {}",
+            "  AP basic     municipality {}{}, DF35 key reference {}",
             basic.municipality_code,
             if municipality == basic.municipality_code {
                 " (agrees with 共通カードAP)"

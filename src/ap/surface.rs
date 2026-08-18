@@ -37,8 +37,8 @@ pub mod ef {
     /// The card face: date of birth, sex, expiry, the rendered fields and the photograph.
     /// Unlocked by either 照合番号.
     pub const CARD_FACE: u16 = 0x0002;
-    /// This application's basic information: an identifier, the key it names, the municipality
-    /// code, and the 照合番号 in encrypted form.
+    /// This application's basic information: an identifier, a key reference, the municipality
+    /// code, and an opaque key-referenced block.
     pub const AP_BASIC_DATA: u16 = 0x0003;
     /// This application's own card-verifiable certificate.
     pub const CERTIFICATE: u16 = 0x0004;
@@ -123,7 +123,7 @@ impl<'a, T: Transmit> SurfaceAp<'a, T> {
     /// signed records, and which needs no credential.
     ///
     /// Hashing happens here: the card is handed a SHA-256 `DigestInfo`, and P2 is `00`, which
-    /// selects the application's default key. That is exactly what the issuer's own SDK sends.
+    /// selects the application's default key.
     ///
     /// Signing a challenge and checking the result against the public key in a record is what
     /// proves the card is present, as opposed to a copy of its files. The record has to be
@@ -179,16 +179,17 @@ impl<'a, T: Transmit> SurfaceAp<'a, T> {
 ///   DF 32 10     a key identifier, but not the one that signs this application's records
 ///   DF 33 01     version
 ///   DF 34 05     全国地方公共団体コード of the issuing municipality
-///   DF 35 8201 10  a key identifier, then 256 bytes: the 照合番号 encrypted under that key
+///   DF 35 8201 10  a key-shaped identifier, then 256 opaque bytes
 /// ```
 ///
-/// Nothing here is secret — the file opens with no credential — and nothing here is signed. The
-/// municipality code repeats what 共通カードAP `0001` says, which is a cheap consistency check.
+/// The file opens with no credential. No signature protecting its clear fields has been
+/// identified, and the meaning of the `DF35` block remains unknown. The municipality code repeats
+/// what 共通カードAP `0001` says, which is only a consistency check.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApBasicData {
     /// `DF31`, four bytes. Identifies the layout; `06 03 0E 01` on the cards seen.
     pub identification: Vec<u8>,
-    /// `DF32` — a key identifier, which the issuer's SDK calls simply the public key.
+    /// `DF32` — a key identifier.
     ///
     /// It is **not** the key EF `0004` certifies: on the cards seen this is `x000024` while the
     /// certificate's 被証明者鍵ID is the municipality's own. What it names is not established.
@@ -197,19 +198,27 @@ pub struct ApBasicData {
     pub version: u8,
     /// `DF34` — five digits, the 全国地方公共団体コード.
     pub municipality_code: String,
-    /// `DF35` — the 照合番号 in encrypted form, and the key it is encrypted under.
+    /// `DF35` — a 16 byte key-shaped reference followed by 256 opaque bytes.
     ///
-    /// The private half is held by the issuer, so this is of no use to a reader; it is here
-    /// because leaving a field out of a parser hides it.
+    /// Its purpose, algorithm and plaintext are not established. The public field name is retained
+    /// for API compatibility; callers should treat the value as opaque.
     pub encrypted_reference_number: EncryptedReferenceNumber,
 }
 
-/// The 照合番号 as EF `0003` carries it: which key it is encrypted under, and the ciphertext.
+/// The still-opaque contents of EF `0003` tag `DF35`.
+///
+/// The historical type name does not establish that the block encrypts 照合番号A, 照合番号B, or
+/// either one in any particular encoding.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EncryptedReferenceNumber {
-    /// The key the issuer encrypted it to.
+    /// The first 16 bytes, in the same format used elsewhere for key identifiers.
+    ///
+    /// What key it identifies and who holds that key are not established.
     pub key_id: KeyId,
-    /// 256 bytes — one RSA-2048 block.
+    /// The remaining 256 opaque bytes.
+    ///
+    /// The length is compatible with an RSA-2048 output, but does not prove the algorithm or the
+    /// meaning of the data.
     pub data: Vec<u8>,
 }
 
@@ -221,11 +230,11 @@ impl ApBasicData {
     pub fn parse(raw: &[u8]) -> Result<Self> {
         let f = TlvFields::parse(raw, Self::TAG, None)?;
         let version = f.get(0xDF33)?;
-        let encrypted = f.get(0xDF35)?;
-        let (key_id, data) = encrypted.split_at_checked(KeyId::LEN).ok_or_else(|| {
+        let df35 = f.get(0xDF35)?;
+        let (key_id, data) = df35.split_at_checked(KeyId::LEN).ok_or_else(|| {
             Error::Malformed(format!(
-                "encrypted 照合番号 is {} bytes, too short to name a key",
-                encrypted.len()
+                "DF35 is {} bytes, too short to contain its 16 byte reference",
+                df35.len()
             ))
         })?;
         Ok(ApBasicData {

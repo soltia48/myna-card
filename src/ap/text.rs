@@ -170,7 +170,7 @@ impl<'a, T: Transmit> TextAp<'a, T> {
     /// signed records, and which needs no credential.
     ///
     /// Hashing happens here: the card is handed a SHA-256 `DigestInfo`, and P2 is `00`, which
-    /// selects the application's default key. That is exactly what the issuer's own SDK sends.
+    /// selects the application's default key.
     ///
     /// Signing a challenge and checking the result against the public key in a record is what
     /// proves the card is present, as opposed to a copy of its files. The record has to be
@@ -491,7 +491,7 @@ mod tests {
 /// FF 40
 ///   DF 41 04     four bytes that identify the layout
 ///   DF 42 10     a key identifier, but not the one that signs this application's records
-///   DF 43 80     128 bytes, not named by the issuer's own SDK
+///   DF 43 80     128 bytes, purpose unknown
 /// ```
 ///
 /// Readable with nothing presented, and nothing here is signed.
@@ -499,16 +499,16 @@ mod tests {
 pub struct ApBasicData {
     /// `DF41`, four bytes. `01 03 0E 01` on the cards seen.
     pub identification: Vec<u8>,
-    /// `DF42` — a key identifier, which the issuer's SDK calls the public key identifier.
+    /// `DF42` — a key identifier.
     ///
     /// It is **not** the key EF `0004` certifies: on the cards seen this is `x000034` while the
     /// certificate's 被証明者鍵ID is the municipality's own. What it names is not established.
     pub public_key_id: KeyId,
     /// `DF43`, 128 bytes, purpose unknown.
     ///
-    /// The issuer's own SDK parses `DF41` and `DF42` and ignores this one. On every card examined
-    /// it is 32 bytes followed by 96 `FF`, which is the shape of a digest in a padded field — see
-    /// [`digest`](Self::digest) — but nothing was found that it is a digest *of*.
+    /// On every card examined it is 32 bytes followed by 96 `FF`, which is the shape of a digest in
+    /// a padded field — see [`digest`](Self::digest) — but nothing was found that it is a digest
+    /// *of*.
     pub trailing: Vec<u8>,
 }
 
