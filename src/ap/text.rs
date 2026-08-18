@@ -233,6 +233,17 @@ impl<'a, T: Transmit> TextAp<'a, T> {
         self.verify_key(ef::PIN, pin)
     }
 
+    /// Change the four digit PIN.
+    ///
+    /// This first presents `current_pin`, which consumes a retry on failure, then replaces it
+    /// with `new_pin`. Construct both values with [`Pin::numeric`] to reject non-digits before
+    /// transmission.
+    pub fn change_pin(&mut self, current_pin: &Pin, new_pin: &Pin) -> Result<()> {
+        self.card.select_ef(ef::PIN)?;
+        self.card.verify(current_pin)?;
+        self.card.change_reference_data(new_pin)
+    }
+
     /// Present 照合番号A.
     pub fn verify_code_a(&mut self, code: &Pin) -> Result<()> {
         self.verify_key(ef::CODE_A, code)
@@ -482,6 +493,35 @@ mod tests {
         ]));
         let mut text = TextAp::select(&mut card).unwrap();
         assert_eq!(text.read_attributes().unwrap().sex, Sex::Male);
+    }
+
+    #[test]
+    fn changing_the_pin_selects_verifies_and_replaces() {
+        let mut card = Card::new(MockTransport::new([
+            vec![0x90, 0x00], // SELECT DF
+            vec![0x90, 0x00], // SELECT EF 0011
+            vec![0x90, 0x00], // VERIFY current PIN
+            vec![0x90, 0x00], // CHANGE REFERENCE DATA
+        ]));
+        let mut text = TextAp::select(&mut card).unwrap();
+        text.change_pin(
+            &Pin::numeric("1234").unwrap(),
+            &Pin::numeric("5678").unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            card.transport().sent[1],
+            [0x00, 0xA4, 0x02, 0x0C, 0x02, 0x00, 0x11]
+        );
+        assert_eq!(
+            card.transport().sent[2],
+            [0x00, 0x20, 0x00, 0x80, 0x04, b'1', b'2', b'3', b'4']
+        );
+        assert_eq!(
+            card.transport().sent[3],
+            [0x00, 0x24, 0x01, 0x80, 0x04, b'5', b'6', b'7', b'8']
+        );
     }
 }
 

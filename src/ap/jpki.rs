@@ -166,6 +166,23 @@ impl<'a, T: Transmit> JpkiAp<'a, T> {
         self.card.verify(pin)
     }
 
+    /// Change the four digit user authentication PIN.
+    ///
+    /// This first presents `current_pin`, which consumes a retry on failure, then replaces it
+    /// with `new_pin`. The card enforces the credential-specific format; construct both values
+    /// with [`Pin::numeric`] to reject non-digits before transmission.
+    pub fn change_auth_pin(&mut self, current_pin: &Pin, new_pin: &Pin) -> Result<()> {
+        self.change_pin(ef::AUTH_PIN, current_pin, new_pin)
+    }
+
+    /// Change the digital signature password.
+    ///
+    /// This first presents `current_pin`, which consumes a retry on failure, then replaces it
+    /// with `new_pin`. The card requires six to sixteen uppercase alphanumeric characters.
+    pub fn change_sign_pin(&mut self, current_pin: &Pin, new_pin: &Pin) -> Result<()> {
+        self.change_pin(ef::SIGN_PIN, current_pin, new_pin)
+    }
+
     /// Attempts remaining on the user authentication PIN, without spending one.
     pub fn auth_pin_retries(&mut self) -> Result<Retries> {
         self.card.select_ef(ef::AUTH_PIN)?;
@@ -176,6 +193,12 @@ impl<'a, T: Transmit> JpkiAp<'a, T> {
     pub fn sign_pin_retries(&mut self) -> Result<Retries> {
         self.card.select_ef(ef::SIGN_PIN)?;
         self.card.pin_retries()
+    }
+
+    fn change_pin(&mut self, key: u16, current_pin: &Pin, new_pin: &Pin) -> Result<()> {
+        self.card.select_ef(key)?;
+        self.card.verify(current_pin)?;
+        self.card.change_reference_data(new_pin)
     }
 
     /// Sign with the user authentication key.
@@ -387,6 +410,58 @@ mod tests {
         assert_eq!(
             &card.transport().sent[2][..5],
             [0x00, 0x20, 0x00, 0x80, 0x0C]
+        );
+    }
+
+    #[test]
+    fn changing_the_auth_pin_verifies_the_old_value_before_replacing_it() {
+        let mut card = Card::new(MockTransport::new([
+            vec![0x90, 0x00], // SELECT DF
+            vec![0x90, 0x00], // SELECT EF 0018
+            vec![0x90, 0x00], // VERIFY current PIN
+            vec![0x90, 0x00], // CHANGE REFERENCE DATA
+        ]));
+        let mut jpki = JpkiAp::select(&mut card).unwrap();
+        jpki.change_auth_pin(
+            &Pin::numeric("1234").unwrap(),
+            &Pin::numeric("5678").unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            card.transport().sent[1],
+            [0x00, 0xA4, 0x02, 0x0C, 0x02, 0x00, 0x18]
+        );
+        assert_eq!(
+            card.transport().sent[2],
+            [0x00, 0x20, 0x00, 0x80, 0x04, b'1', b'2', b'3', b'4']
+        );
+        assert_eq!(
+            card.transport().sent[3],
+            [0x00, 0x24, 0x01, 0x80, 0x04, b'5', b'6', b'7', b'8']
+        );
+    }
+
+    #[test]
+    fn changing_the_sign_pin_stops_when_the_old_value_is_wrong() {
+        let mut card = Card::new(MockTransport::new([
+            vec![0x90, 0x00], // SELECT DF
+            vec![0x90, 0x00], // SELECT EF 001B
+            vec![0x63, 0xC2], // VERIFY current PIN
+        ]));
+        let mut jpki = JpkiAp::select(&mut card).unwrap();
+        let err = jpki
+            .change_sign_pin(
+                &Pin::new("CURRENT1").unwrap(),
+                &Pin::new("REPLACEMENT2").unwrap(),
+            )
+            .unwrap_err();
+
+        assert!(matches!(err, Error::PinIncorrect { retries: Some(2) }));
+        assert_eq!(card.transport().sent.len(), 3);
+        assert_eq!(
+            card.transport().sent[1],
+            [0x00, 0xA4, 0x02, 0x0C, 0x02, 0x00, 0x1B]
         );
     }
 

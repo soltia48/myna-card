@@ -15,6 +15,9 @@ pub mod ins {
     pub const ERASE_ALL_RECORDS: u8 = 0x06;
     /// VERIFY.
     pub const VERIFY: u8 = 0x20;
+    /// CHANGE REFERENCE DATA. Not a JICSAP command; used by the JPKI and 券面入力補助
+    /// applications to replace a PIN after a successful VERIFY.
+    pub const CHANGE_REFERENCE_DATA: u8 = 0x24;
     /// CHANGE KEY (extended system command, CLA 8x).
     pub const CHANGE_KEY: u8 = 0x32;
     /// LOCK DF (extended system command, CLA 8x).
@@ -556,6 +559,46 @@ impl<T: Transmit> Card<T> {
         Ok(())
     }
 
+    /// Replace the PIN in the currently selected internal EF with `new_pin` using ISO/IEC
+    /// 7816-4 CHANGE REFERENCE DATA.
+    ///
+    /// The current PIN must already have been presented with [`Card::verify`]. This is the form
+    /// used by the JPKI and 券面入力補助 applications: P1=`01` means replacement data, and
+    /// P2=`80` refers to the current EF.
+    ///
+    /// Prefer the per-application change methods, which select the right EF and verify the old
+    /// PIN before reaching this command.
+    pub fn change_reference_data(&mut self, new_pin: &Pin) -> Result<()> {
+        self.call_ok(&Command::with_data(
+            cla::USER,
+            ins::CHANGE_REFERENCE_DATA,
+            0x01,
+            0x80,
+            new_pin.as_bytes(),
+        ))?;
+        Ok(())
+    }
+
+    /// Replace the PIN in the currently selected internal EF with `new_pin` using JICSAP CHANGE
+    /// KEY.
+    ///
+    /// The current PIN must already have been presented with [`Card::verify`], so that the
+    /// changing security condition of the IEF is fulfilled. This is the form used by the 共通
+    /// カード and 住基 applications: P1=`00`, and P2=`80` refers to the current EF.
+    ///
+    /// This accepts a [`Pin`] rather than arbitrary key material because it exposes only the PIN
+    /// changing use of the broader JICSAP command. Prefer the per-application change methods.
+    pub fn change_key(&mut self, new_pin: &Pin) -> Result<()> {
+        self.call_ok(&Command::with_data(
+            cla::SYSTEM,
+            ins::CHANGE_KEY,
+            0x00,
+            0x80,
+            new_pin.as_bytes(),
+        ))?;
+        Ok(())
+    }
+
     /// Ask how many attempts remain on the currently selected internal EF.
     ///
     /// This sends a VERIFY with no data field, which JICSAP 6.4.9 (5) defines as querying the
@@ -792,6 +835,27 @@ mod tests {
         assert_eq!(
             card.transport().sent[0],
             [0x00, 0x20, 0x00, 0x80, 0x04, b'1', b'2', b'3', b'4']
+        );
+    }
+
+    #[test]
+    fn changes_reference_data_with_the_current_ef_form() {
+        let mut card = Card::new(MockTransport::new([ok(&[])]));
+        card.change_reference_data(&Pin::numeric("5678").unwrap())
+            .unwrap();
+        assert_eq!(
+            card.transport().sent[0],
+            [0x00, 0x24, 0x01, 0x80, 0x04, b'5', b'6', b'7', b'8']
+        );
+    }
+
+    #[test]
+    fn changes_a_jicsap_key_with_the_current_ef_form() {
+        let mut card = Card::new(MockTransport::new([ok(&[])]));
+        card.change_key(&Pin::numeric("5678").unwrap()).unwrap();
+        assert_eq!(
+            card.transport().sent[0],
+            [0x80, 0x32, 0x00, 0x80, 0x04, b'5', b'6', b'7', b'8']
         );
     }
 

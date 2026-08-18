@@ -21,7 +21,10 @@ pub const DF: [u8; 10] = [0xD3, 0x92, 0x10, 0x00, 0x31, 0x00, 0x01, 0x01, 0x04, 
 pub mod ef {
     /// One 16 byte key reference, byte-identical to EF `0002` of the 共通カード application.
     pub const KEY_REFERENCE: u16 = 0x0002;
-    /// Key reference for the PIN.
+    /// Key reference for the four digit PIN in the 住基 application.
+    ///
+    /// User interfaces group it with 共通カードAP `001C` as one 個人番号カード用 PIN, but they
+    /// are separate key references and must be changed separately.
     pub const PIN: u16 = 0x001C;
 }
 
@@ -55,9 +58,53 @@ impl<'a, T: Transmit> JukiAp<'a, T> {
         self.card.verify(pin)
     }
 
+    /// Change the four digit PIN in the 住基 application.
+    ///
+    /// What user interfaces call the 個人番号カード用 PIN has one key reference here and
+    /// another in the 本人確認業務用領域. Changing both therefore requires calling this method
+    /// and [`CommonAp::change_pin`](crate::ap::common::CommonAp::change_pin); either operation may
+    /// succeed independently. This method first presents `current_pin`, consuming a retry on
+    /// failure, then replaces it with `new_pin` using JICSAP CHANGE KEY.
+    pub fn change_pin(&mut self, current_pin: &Pin, new_pin: &Pin) -> Result<()> {
+        self.card.select_ef(ef::PIN)?;
+        self.card.verify(current_pin)?;
+        self.card.change_key(new_pin)
+    }
+
     /// Attempts remaining on the PIN, without spending one.
     pub fn pin_retries(&mut self) -> Result<Retries> {
         self.card.select_ef(ef::PIN)?;
         self.card.pin_retries()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transport::mock::MockTransport;
+
+    #[test]
+    fn changing_the_pin_uses_jicsap_change_key() {
+        let mut card = Card::new(MockTransport::new([
+            vec![0x90, 0x00], // SELECT DF
+            vec![0x90, 0x00], // SELECT EF 001C
+            vec![0x90, 0x00], // VERIFY current PIN
+            vec![0x90, 0x00], // CHANGE KEY
+        ]));
+        let mut juki = JukiAp::select(&mut card).unwrap();
+        juki.change_pin(
+            &Pin::numeric("1234").unwrap(),
+            &Pin::numeric("5678").unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            card.transport().sent[1],
+            [0x00, 0xA4, 0x02, 0x0C, 0x02, 0x00, 0x1C]
+        );
+        assert_eq!(
+            card.transport().sent[3],
+            [0x80, 0x32, 0x00, 0x80, 0x04, b'5', b'6', b'7', b'8']
+        );
     }
 }
