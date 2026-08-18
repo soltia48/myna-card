@@ -41,5 +41,6 @@ pub mod juki;
 pub mod surface;
 pub mod text;
 
-/// The AID of the DF that is selected when the card is powered up.
+/// The default AID of the GlobalPlatform Issuer Security Domain, selected when the card is powered
+/// up.
 pub const DEFAULT_DF: [u8; 7] = [0xA0, 0x00, 0x00, 0x01, 0x51, 0x00, 0x00];

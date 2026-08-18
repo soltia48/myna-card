@@ -23,11 +23,12 @@
 //! - Sweeping every identifier `0001`-`001E` immediately after a cold reset finds nothing at all,
 //!   so the MF holds no elementary file with a short identifier.
 //!
-//! Worse, the MF cannot be re-selected: `00 A4 00 00` answers 6A86 after a reset and 9000 —
-//! *without changing the current DF* — once an application is selected, and 3F00 answers 6A82.
-//! That is why [`MasterFile::new`] performs no SELECT and insists the caller has just reset the
-//! card. Everything readable on this card lives inside the five application DFs; see
-//! [`crate::ap`].
+//! The ISO MF cannot be re-selected: `00 A4 00 00` answers 6A86 after a reset and 9000 — *without
+//! changing the current DF* — once an application is selected, and 3F00 answers 6A82. The same
+//! observable power-on state is nevertheless reachable through GlobalPlatform: selecting the
+//! Issuer Security Domain at its default AID, `A0000001510000`, restores the MF-level GET DATA
+//! objects. [`MasterFile::select`] performs that selection; [`MasterFile::new`] remains available
+//! when the card is already freshly reset.
 //!
 //! The module is kept because it is what JICSAP specifies, and other cards built to the same
 //! specification do carry these files.
@@ -89,15 +90,26 @@ pub struct MasterFile<'a, T> {
 }
 
 impl<'a, T: Transmit> MasterFile<'a, T> {
+    /// Select the GlobalPlatform Issuer Security Domain and work with the power-on card-manager
+    /// state.
+    ///
+    /// The Individual Number Card does not implement a trustworthy ISO SELECT MF command, but its
+    /// default Issuer Security Domain AID is selectable. On the surveyed card this restores the
+    /// same GET DATA objects as a cold reset, even after an application DF was current.
+    pub fn select(card: &'a mut Card<T>) -> Result<Self> {
+        card.select_df(&crate::ap::DEFAULT_DF)?;
+        Ok(MasterFile { card })
+    }
+
     /// Work with the master file as the current DF.
     ///
-    /// This issues no SELECT, because on the Individual Number Card no command selects the MF —
-    /// see the module documentation. A card reset makes the MF current on every logical channel
-    /// (JICSAP 4.5), and that is the only state in which this type is meaningful.
+    /// This issues no SELECT. A card reset makes the card-manager state current on every logical
+    /// channel (JICSAP 4.5); [`MasterFile::select`] can restore it later through the
+    /// GlobalPlatform Issuer Security Domain AID.
     ///
-    /// The caller is responsible for that: reset the card, or use it before selecting any
-    /// application. If an application DF is current instead, every read here silently comes from
-    /// that application.
+    /// The caller is responsible for ensuring that state: reset the card, select the Issuer
+    /// Security Domain, or use this before selecting any application. If an application DF is
+    /// current instead, every read here silently comes from that application.
     pub fn new(card: &'a mut Card<T>) -> Self {
         MasterFile { card }
     }
@@ -487,6 +499,18 @@ mod tests {
     }
 
     #[test]
+    fn selects_the_default_issuer_security_domain() {
+        let mut card = Card::new(MockTransport::new([vec![0x90, 0x00]]));
+        let mut mf = MasterFile::select(&mut card).unwrap();
+        assert_eq!(
+            mf.card().transport().sent,
+            [vec![
+                0x00, 0xA4, 0x04, 0x0C, 0x07, 0xA0, 0x00, 0x00, 0x01, 0x51, 0x00, 0x00,
+            ]]
+        );
+    }
+
+    #[test]
     fn get_data_uses_one_apdu_when_the_object_is_small() {
         let mut card = Card::new(MockTransport::new([vec![
             b'1', b'3', b'2', b'2', b'1', 0x90, 0x00,
@@ -514,7 +538,7 @@ mod tests {
 
     #[test]
     fn reads_records_one_at_a_time_when_the_card_rejects_the_multi_record_form() {
-        // No SELECT MF: `MasterFile::new` issues none, because no command selects the MF.
+        // No SELECT here: `MasterFile::new` assumes the card-manager state is already current.
         let mut card = Card::new(MockTransport::new([
             vec![0x90, 0x00],                               // SELECT EF 001E
             vec![0x6A, 0x81],                               // READ RECORD(S) 1..last: not provided

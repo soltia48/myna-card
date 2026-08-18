@@ -197,17 +197,17 @@ impl<T: Transmit> Card<T> {
         Response::parse(&raw)
     }
 
-    // There is deliberately no `select_mf`. JICSAP 6.4.8 (3) ① specifies `00 A4 00 00` for it,
-    // but on the Individual Number Card that command is worse than unsupported:
+    // There is deliberately no ISO `select_mf`. JICSAP 6.4.8 (3) ① specifies `00 A4 00 00`
+    // for it, but on the Individual Number Card that command is worse than unsupported:
     //
     //   - issued straight after a cold reset, it answers 6A86 (incorrect P1-P2);
     //   - issued while an application DF is current, it answers 9000 and leaves the current DF
     //     exactly where it was.
     //
-    // Selecting 3F00 by file identifier answers 6A82 either way. So a wrapper would report
-    // success while doing nothing, and every read after it would silently come from the previous
-    // DF. The only way back to the MF is a card reset, after which it is already current — see
-    // [`crate::mf::MasterFile`].
+    // Selecting 3F00 by file identifier answers 6A82 either way. So a wrapper for the ISO form
+    // would report success while doing nothing, and every read after it would silently come from
+    // the previous DF. The power-on card-manager state can instead be restored by selecting the
+    // GlobalPlatform Issuer Security Domain; see [`crate::mf::MasterFile::select`].
 
     /// SELECT FILE, selecting a dedicated file by its name (AID).
     ///
@@ -504,8 +504,9 @@ impl<T: Transmit> Card<T> {
 
     /// GET DATA — retrieve the data object named by `tag`, which goes in P1-P2.
     ///
-    /// Not a JICSAP command. The card implements it anyway, and with no DF selected it is the
-    /// only route to a set of objects that no EF holds; see [`crate::mf::MasterFile`].
+    /// Not a JICSAP command. The card implements it anyway, and with the default GlobalPlatform
+    /// Issuer Security Domain current it is the only route to a set of objects that no EF holds;
+    /// see [`crate::mf::MasterFile`].
     ///
     /// Objects here range from one byte to several hundred, and the card refuses a short `Le` for
     /// the large ones rather than reporting the right length, so a 6700 is retried with an
