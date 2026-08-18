@@ -232,6 +232,10 @@ mod card_verifiable_certificates {
 #[test]
 fn the_ap_basic_data_preserves_the_municipality_and_opaque_df35() {
     let basic = myna_card::ap::surface::ApBasicData::parse(&fixture("surface-0003.bin")).unwrap();
+    assert_eq!(basic.identification.specification_version, 0x06);
+    assert_eq!(basic.identification.extended_lc_le_support, 0x03);
+    assert_eq!(basic.identification.vendor_id, 0x0E);
+    assert_eq!(basic.identification.vendor_specific, 0x01);
     assert_eq!(basic.municipality_code, "13221");
     assert_eq!(basic.version, 0x00);
     assert_eq!(basic.public_key_id.to_string(), "6000024/001");

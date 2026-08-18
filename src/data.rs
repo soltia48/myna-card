@@ -10,6 +10,68 @@ use crate::error::{Error, Result};
 use crate::pin::Pin;
 use crate::tlv::ber;
 
+/// The four-byte identification field in an application's basic-data file.
+///
+/// The bytes are stored in this order:
+///
+/// ```text
+/// 00  specification version
+/// 01  extended Lc/Le support status
+/// 02  vendor identifier
+/// 03  vendor-specific value
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ApIdentification {
+    /// Byte 0: specification version.
+    pub specification_version: u8,
+    /// Byte 1: extended Lc/Le support status.
+    pub extended_lc_le_support: u8,
+    /// Byte 2: vendor identifier.
+    pub vendor_id: u8,
+    /// Byte 3: vendor-specific value.
+    pub vendor_specific: u8,
+}
+
+impl ApIdentification {
+    /// Encoded length of the field.
+    pub const LEN: usize = 4;
+
+    /// Parse the four bytes of an application-identification field.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Malformed`] if `bytes` is not exactly four bytes long.
+    pub fn parse(bytes: &[u8]) -> Result<Self> {
+        let [
+            specification_version,
+            extended_lc_le_support,
+            vendor_id,
+            vendor_specific,
+        ] = <[u8; Self::LEN]>::try_from(bytes).map_err(|_| {
+            malformed(&format!(
+                "AP identification must be 4 bytes, got {}",
+                bytes.len()
+            ))
+        })?;
+        Ok(Self {
+            specification_version,
+            extended_lc_le_support,
+            vendor_id,
+            vendor_specific,
+        })
+    }
+
+    /// Encode the field in its original byte order.
+    pub const fn to_bytes(self) -> [u8; Self::LEN] {
+        [
+            self.specification_version,
+            self.extended_lc_le_support,
+            self.vendor_id,
+            self.vendor_specific,
+        ]
+    }
+}
+
 /// A calendar date, as the card writes it: eight ASCII digits, `YYYYMMDD`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Date {
@@ -813,6 +875,18 @@ impl CardVerifiableCertificate {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_an_ap_identification_field() {
+        let identification = ApIdentification::parse(&[0x06, 0x03, 0x0E, 0x01]).unwrap();
+        assert_eq!(identification.specification_version, 0x06);
+        assert_eq!(identification.extended_lc_le_support, 0x03);
+        assert_eq!(identification.vendor_id, 0x0E);
+        assert_eq!(identification.vendor_specific, 0x01);
+        assert_eq!(identification.to_bytes(), [0x06, 0x03, 0x0E, 0x01]);
+        assert!(ApIdentification::parse(&[0x06, 0x03, 0x0E]).is_err());
+        assert!(ApIdentification::parse(&[0x06, 0x03, 0x0E, 0x01, 0x00]).is_err());
+    }
 
     #[test]
     fn parses_a_date() {

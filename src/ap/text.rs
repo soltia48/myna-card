@@ -32,8 +32,8 @@
 
 use crate::card::{Card, Retries};
 use crate::data::{
-    CardVerifiableCertificate, Date, KeyId, MyNumber, RsaPublicKey, Sex, TlvFields, check_offsets,
-    malformed,
+    ApIdentification, CardVerifiableCertificate, Date, KeyId, MyNumber, RsaPublicKey, Sex,
+    TlvFields, check_offsets, malformed,
 };
 use crate::error::Result;
 use crate::pin::Pin;
@@ -489,7 +489,7 @@ mod tests {
 ///
 /// ```text
 /// FF 40
-///   DF 41 04     four bytes that identify the layout
+///   DF 41 04     specification version, extended Lc/Le support, vendor ID, vendor-specific byte
 ///   DF 42 10     a key identifier, but not the one that signs this application's records
 ///   DF 43 80     128 bytes, purpose unknown
 /// ```
@@ -497,8 +497,10 @@ mod tests {
 /// Readable with nothing presented, and nothing here is signed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApBasicData {
-    /// `DF41`, four bytes. `01 03 0E 01` on the cards seen.
-    pub identification: Vec<u8>,
+    /// `DF41` — specification version, extended Lc/Le support, vendor ID and vendor-specific byte.
+    ///
+    /// `01 03 0E 01` on the cards seen.
+    pub identification: ApIdentification,
     /// `DF42` — a key identifier.
     ///
     /// It is **not** the key EF `0004` certifies: on the cards seen this is `x000034` while the
@@ -528,7 +530,7 @@ impl ApBasicData {
     pub fn parse(raw: &[u8]) -> Result<Self> {
         let f = TlvFields::parse(raw, Self::TAG, None)?;
         Ok(ApBasicData {
-            identification: f.get(0xDF41)?.to_vec(),
+            identification: ApIdentification::parse(f.get(0xDF41)?)?,
             public_key_id: KeyId::parse(f.get(0xDF42)?)?,
             trailing: f.get(0xDF43)?.to_vec(),
         })

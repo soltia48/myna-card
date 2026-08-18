@@ -126,7 +126,10 @@ fn the_certificate_chain_links() {
 #[test]
 fn the_ap_basic_data_names_a_key_that_is_not_the_signing_key() {
     let basic = ApBasicData::parse(&fixture("text-0005.bin")).unwrap();
-    assert_eq!(basic.identification, [0x01, 0x03, 0x0E, 0x01]);
+    assert_eq!(basic.identification.specification_version, 0x01);
+    assert_eq!(basic.identification.extended_lc_le_support, 0x03);
+    assert_eq!(basic.identification.vendor_id, 0x0E);
+    assert_eq!(basic.identification.vendor_specific, 0x01);
     assert_eq!(basic.public_key_id.to_string(), "6000034/001");
 
     // Not the key EF 0004 certifies.

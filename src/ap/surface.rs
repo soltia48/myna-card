@@ -21,7 +21,8 @@
 
 use crate::card::{Card, Retries};
 use crate::data::{
-    CardVerifiableCertificate, Date, Image, KeyId, RsaPublicKey, Sex, TlvFields, malformed,
+    ApIdentification, CardVerifiableCertificate, Date, Image, KeyId, RsaPublicKey, Sex, TlvFields,
+    malformed,
 };
 use crate::error::{Error, Result};
 use crate::pin::Pin;
@@ -175,7 +176,7 @@ impl<'a, T: Transmit> SurfaceAp<'a, T> {
 ///
 /// ```text
 /// FF 30
-///   DF 31 04     four bytes that identify the layout
+///   DF 31 04     specification version, extended Lc/Le support, vendor ID, vendor-specific byte
 ///   DF 32 10     a key identifier, but not the one that signs this application's records
 ///   DF 33 01     version
 ///   DF 34 05     全国地方公共団体コード of the issuing municipality
@@ -187,8 +188,10 @@ impl<'a, T: Transmit> SurfaceAp<'a, T> {
 /// what 共通カードAP `0001` says, which is only a consistency check.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApBasicData {
-    /// `DF31`, four bytes. Identifies the layout; `06 03 0E 01` on the cards seen.
-    pub identification: Vec<u8>,
+    /// `DF31` — specification version, extended Lc/Le support, vendor ID and vendor-specific byte.
+    ///
+    /// `06 03 0E 01` on the cards seen.
+    pub identification: ApIdentification,
     /// `DF32` — a key identifier.
     ///
     /// It is **not** the key EF `0004` certifies: on the cards seen this is `x000024` while the
@@ -238,7 +241,7 @@ impl ApBasicData {
             ))
         })?;
         Ok(ApBasicData {
-            identification: f.get(0xDF31)?.to_vec(),
+            identification: ApIdentification::parse(f.get(0xDF31)?)?,
             public_key_id: KeyId::parse(f.get(0xDF32)?)?,
             version: *version
                 .first()
