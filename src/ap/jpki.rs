@@ -31,12 +31,16 @@ pub mod ef {
     pub const SIGN_CERTIFICATE: u16 = 0x0001;
     /// CA certificate for the digital signature certificate (署名用CA証明書).
     pub const SIGN_CA_CERTIFICATE: u16 = 0x0002;
-    /// Token information, 160 bytes. Its first 32 bytes name the token type; see
-    /// [`TokenType`](super::TokenType).
+    /// PKCS #11 token information, 160 bytes. See [`TokenInfo`](super::TokenInfo).
     pub const TOKEN_INFO: u16 = 0x0006;
     /// Three bytes saying which of the two certificates this card carries. See
     /// [`CertificateAvailability`](super::CertificateAvailability).
     pub const CERTIFICATE_AVAILABILITY: u16 = 0x0008;
+    /// Protected transparent EF whose purpose and complete access condition remain unknown.
+    ///
+    /// Neither cardholder credential nor an accepted terminal certificate made it readable on
+    /// the surveyed card.
+    pub const UNKNOWN_0009: u16 = 0x0009;
     /// Key reference the terminal's card-verifiable certificate is checked against, by
     /// SET PUBLIC IC KEY. See [`crate::card::ins::SET_PUBLIC_IC_KEY`].
     pub const TERMINAL_CA: u16 = 0x0016;
@@ -87,6 +91,17 @@ impl<'a, T: Transmit> JpkiAp<'a, T> {
         // A fixed 160 byte record, not TLV, so read it as stored.
         let raw = self.card.read_binary_physical()?;
         Ok(TokenType::from_bytes(&raw))
+    }
+
+    /// Read all of the PKCS #11 `CK_TOKEN_INFO` stored in EF `0006`.
+    ///
+    /// The card serialises the structure with 32-bit big-endian `CK_ULONG` fields, making it 160
+    /// bytes. The two version slots are returned as raw bytes because physical cards have been
+    /// observed to put ASCII `"03"` and `"01"` there rather than numeric `CK_VERSION` pairs.
+    pub fn read_token_info(&mut self) -> Result<TokenInfo> {
+        self.card.select_ef(ef::TOKEN_INFO)?;
+        let raw = self.card.read_binary_physical()?;
+        TokenInfo::parse(&raw)
     }
 
     /// Read EF `0008`, which says which of the two certificates the card carries.
@@ -645,6 +660,137 @@ pub enum TokenType {
     Absent,
 }
 
+/// PKCS #11 token-information flags found in [`TokenInfo::flags`].
+pub mod token_flag {
+    /// `CKF_RNG`: the token has its own random number generator.
+    pub const RNG: u32 = 0x0000_0001;
+    /// `CKF_LOGIN_REQUIRED`: some cryptographic operations require login.
+    pub const LOGIN_REQUIRED: u32 = 0x0000_0004;
+    /// `CKF_USER_PIN_INITIALIZED`: the normal user's PIN has been initialised.
+    pub const USER_PIN_INITIALIZED: u32 = 0x0000_0008;
+    /// `CKF_CLOCK_ON_TOKEN`: the token has a hardware clock and `utc_time` is meaningful.
+    pub const CLOCK_ON_TOKEN: u32 = 0x0000_0040;
+    /// `CKF_TOKEN_INITIALIZED`: the token has been initialised.
+    pub const TOKEN_INITIALIZED: u32 = 0x0000_0400;
+}
+
+/// EF `0006`, a serialised PKCS #11 `CK_TOKEN_INFO` structure.
+///
+/// PKCS #11 leaves `CK_ULONG` platform-sized. This on-card representation fixes it at four bytes
+/// and writes each integer most-significant byte first. Fixed text fields have their trailing
+/// spaces removed here; version and time fields stay raw because the physical-card values do not
+/// follow the literal `CK_VERSION` and UTC encodings in the PKCS #11 specification.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TokenInfo {
+    /// The space-padded `label[32]`, classified into the known JPKI token kinds.
+    pub token_type: TokenType,
+    /// The space-padded `manufacturerID[32]` field, with padding removed.
+    pub manufacturer_id: String,
+    /// The space-padded `model[16]` field, with padding removed.
+    pub model: String,
+    /// The space-padded `serialNumber[16]` field, with padding removed.
+    pub serial_number: String,
+    /// PKCS #11 `CKF_*` token-information flags. See [`token_flag`].
+    pub flags: u32,
+    /// Maximum sessions one application may open at once.
+    pub max_session_count: u32,
+    /// Sessions currently open by the application represented by this record.
+    pub session_count: u32,
+    /// Maximum read/write sessions one application may open at once.
+    pub max_rw_session_count: u32,
+    /// Read/write sessions currently open by the represented application.
+    pub rw_session_count: u32,
+    /// Maximum PIN length in bytes.
+    pub max_pin_len: u32,
+    /// Minimum PIN length in bytes.
+    pub min_pin_len: u32,
+    /// Total public-object memory, or [`TokenInfo::UNAVAILABLE_INFORMATION`].
+    pub total_public_memory: u32,
+    /// Free public-object memory, or [`TokenInfo::UNAVAILABLE_INFORMATION`].
+    pub free_public_memory: u32,
+    /// Total private-object memory, or [`TokenInfo::UNAVAILABLE_INFORMATION`].
+    pub total_private_memory: u32,
+    /// Free private-object memory, or [`TokenInfo::UNAVAILABLE_INFORMATION`].
+    pub free_private_memory: u32,
+    /// Raw two-byte `hardwareVersion` slot.
+    pub hardware_version: [u8; 2],
+    /// Raw two-byte `firmwareVersion` slot.
+    pub firmware_version: [u8; 2],
+    /// Raw 16-byte `utcTime` slot.
+    pub utc_time: [u8; 16],
+}
+
+impl TokenInfo {
+    /// Size of the fixed on-card structure.
+    pub const LEN: usize = 160;
+    /// PKCS #11 `CK_UNAVAILABLE_INFORMATION` for this 32-bit representation.
+    pub const UNAVAILABLE_INFORMATION: u32 = u32::MAX;
+    /// PKCS #11 `CK_EFFECTIVELY_INFINITE`, meaningful in the two maximum-session fields.
+    pub const EFFECTIVELY_INFINITE: u32 = 0;
+
+    /// Parse the 160 bytes of EF `0006`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Malformed`] if the length is not exactly 160 bytes, or if the manufacturer, model,
+    /// or serial-number field is not valid UTF-8.
+    pub fn parse(raw: &[u8]) -> Result<Self> {
+        if raw.len() != Self::LEN {
+            return Err(Error::Malformed(format!(
+                "EF 0006 is {} bytes, not {}",
+                raw.len(),
+                Self::LEN
+            )));
+        }
+
+        fn text(raw: &[u8], field: &str) -> Result<String> {
+            std::str::from_utf8(raw)
+                .map(|value| value.trim_end_matches(' ').to_owned())
+                .map_err(|_| Error::Malformed(format!("EF 0006 {field} is not valid UTF-8")))
+        }
+
+        fn word(raw: &[u8], offset: usize) -> u32 {
+            u32::from_be_bytes(
+                raw[offset..offset + 4]
+                    .try_into()
+                    .expect("TokenInfo length was checked"),
+            )
+        }
+
+        Ok(TokenInfo {
+            token_type: TokenType::from_bytes(raw),
+            manufacturer_id: text(&raw[32..64], "manufacturer ID")?,
+            model: text(&raw[64..80], "model")?,
+            serial_number: text(&raw[80..96], "serial number")?,
+            flags: word(raw, 96),
+            max_session_count: word(raw, 100),
+            session_count: word(raw, 104),
+            max_rw_session_count: word(raw, 108),
+            rw_session_count: word(raw, 112),
+            max_pin_len: word(raw, 116),
+            min_pin_len: word(raw, 120),
+            total_public_memory: word(raw, 124),
+            free_public_memory: word(raw, 128),
+            total_private_memory: word(raw, 132),
+            free_private_memory: word(raw, 136),
+            hardware_version: raw[140..142]
+                .try_into()
+                .expect("TokenInfo length was checked"),
+            firmware_version: raw[142..144]
+                .try_into()
+                .expect("TokenInfo length was checked"),
+            utc_time: raw[144..160]
+                .try_into()
+                .expect("TokenInfo length was checked"),
+        })
+    }
+
+    /// Whether every bit in `flag` is set.
+    pub fn has_flag(&self, flag: u32) -> bool {
+        self.flags & flag == flag
+    }
+}
+
 impl TokenType {
     /// Name of a physical card.
     pub const CARD: &'static [u8; 32] = b"JPKIAPICCTOKEN2                 ";
@@ -717,5 +863,62 @@ mod token_tests {
             t => panic!("expected Other, got {t:?}"),
         }
         assert_eq!(TokenType::from_bytes(b"short"), TokenType::Absent);
+    }
+
+    #[test]
+    fn parses_the_physical_card_token_info_layout() {
+        let mut raw = [b' '; TokenInfo::LEN];
+        raw[..32].copy_from_slice(TokenType::CARD);
+        raw[32..64].copy_from_slice(b"00000000000000000000000000000001");
+        raw[64..72].copy_from_slice(b"E16R01NJ");
+        raw[80..96].copy_from_slice(b"0000000020500003");
+        for (offset, value) in [
+            (96, 0x0000_040D),
+            (100, 1),
+            (104, 0),
+            (108, 1),
+            (112, 0),
+            (116, 16),
+            (120, 6),
+            (124, u32::MAX),
+            (128, u32::MAX),
+            (132, u32::MAX),
+            (136, u32::MAX),
+        ] {
+            raw[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
+        }
+        raw[140..142].copy_from_slice(b"03");
+        raw[142..144].copy_from_slice(b"01");
+        raw[144..160].fill(b'9');
+
+        let info = TokenInfo::parse(&raw).unwrap();
+        assert_eq!(info.token_type, TokenType::Card);
+        assert_eq!(info.manufacturer_id, "00000000000000000000000000000001");
+        assert_eq!(info.model, "E16R01NJ");
+        assert_eq!(info.serial_number, "0000000020500003");
+        assert!(info.has_flag(token_flag::RNG));
+        assert!(info.has_flag(token_flag::LOGIN_REQUIRED));
+        assert!(info.has_flag(token_flag::USER_PIN_INITIALIZED));
+        assert!(info.has_flag(token_flag::TOKEN_INITIALIZED));
+        assert!(!info.has_flag(token_flag::CLOCK_ON_TOKEN));
+        assert_eq!((info.max_session_count, info.session_count), (1, 0));
+        assert_eq!((info.max_rw_session_count, info.rw_session_count), (1, 0));
+        assert_eq!((info.max_pin_len, info.min_pin_len), (16, 6));
+        assert_eq!(info.total_public_memory, TokenInfo::UNAVAILABLE_INFORMATION);
+        assert_eq!(info.free_public_memory, TokenInfo::UNAVAILABLE_INFORMATION);
+        assert_eq!(
+            info.total_private_memory,
+            TokenInfo::UNAVAILABLE_INFORMATION
+        );
+        assert_eq!(info.free_private_memory, TokenInfo::UNAVAILABLE_INFORMATION);
+        assert_eq!(info.hardware_version, *b"03");
+        assert_eq!(info.firmware_version, *b"01");
+        assert_eq!(info.utc_time, [b'9'; 16]);
+    }
+
+    #[test]
+    fn token_info_requires_the_exact_structure_size() {
+        let error = TokenInfo::parse(&[0; TokenInfo::LEN - 1]).unwrap_err();
+        assert!(error.to_string().contains("159 bytes, not 160"));
     }
 }

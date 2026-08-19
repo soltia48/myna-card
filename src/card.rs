@@ -32,6 +32,13 @@ pub mod ins {
     pub const GET_CHALLENGE: u8 = 0x84;
     /// INTERNAL AUTHENTICATE.
     pub const INTERNAL_AUTHENTICATE: u8 = 0x88;
+    /// MANAGE ATTRIBUTES (extended system command, CLA 8x).
+    ///
+    /// This is an issuance/administration command that sets or updates file attributes. It is
+    /// intentionally not wrapped by [`super::Card`]: a successful call can persistently change a
+    /// DF or EF. On the issued Individual Number Card, probes reach the issuer-security check only
+    /// for P1 `22` (update current EF) and `24` (update current DF).
+    pub const MANAGE_ATTRIBUTES: u8 = 0x8A;
     /// SELECT FILE.
     pub const SELECT_FILE: u8 = 0xA4;
     /// READ BINARY.
@@ -42,6 +49,8 @@ pub mod ins {
     pub const GET_RESPONSE: u8 = 0xC0;
     /// GET DATA. Not a JICSAP command, but the card implements it; see [`Card::get_data`](super::Card::get_data).
     pub const GET_DATA: u8 = 0xCA;
+    /// SET SESSION KEY, used by secure messaging in the 券面入力補助 application (CLA 80).
+    pub const SET_SESSION_KEY: u8 = 0xAE;
     /// COMPUTE DIGITAL SIGNATURE. Not a JICSAP command; the JPKI application's own, CLA 80.
     pub const COMPUTE_SIGNATURE: u8 = 0x2A;
     /// SET PUBLIC IC KEY. Not a JICSAP command; CLA 80.
@@ -58,7 +67,9 @@ pub mod ins {
     /// certificate signed by a terminal CA to complete the exchange with.
     pub const SET_PUBLIC_IC_KEY: u8 = 0xA2;
     /// The last-command indicator, `80 FC 00 00` with no data. Not a JICSAP command; CLA 80.
-    /// A reader sends it to tell the card the session is over.
+    ///
+    /// This belongs to the iPhone JPKI-token profile, not to the physical-card profile: the
+    /// physical cards examined reject the exact four-byte command with `6700`.
     pub const LAST_COMMAND_INDICATOR: u8 = 0xFC;
 }
 

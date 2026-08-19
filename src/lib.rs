@@ -88,7 +88,7 @@ pub mod sm;
 pub mod tlv;
 pub mod transport;
 
-pub use ap::jpki::TokenType;
+pub use ap::jpki::{TokenInfo, TokenType};
 pub use apdu::{Command, Response, StatusWord};
 pub use card::{Card, Retries, ShortEfId};
 #[cfg(feature = "verify")]

@@ -100,9 +100,6 @@ const TAG_EXPECTED_LENGTH: u8 = 0x96;
 /// The padding-content indicator that precedes a cryptogram. Any other value is rejected.
 const PADDING_INDICATOR: u8 = 0x01;
 
-/// `SET SESSION KEY`, an extended system command of this card rather than an ISO/IEC 7816-4 one.
-const INS_SET_SESSION_KEY: u8 = 0xAE;
-
 /// Tag of the outer object of the key delivery message.
 const TAG_KEY_DELIVERY: u8 = 0xA0;
 /// Tag of the encryption key inside it.
@@ -151,7 +148,7 @@ impl<'a, T: Transmit> SecureSession<'a, T> {
         let delivered = public_key.encrypt_oaep_sha256(&message)?;
         card.call_ok(&Command::with_data(
             cla::SYSTEM,
-            INS_SET_SESSION_KEY,
+            ins::SET_SESSION_KEY,
             0x00,
             0x00,
             delivered,

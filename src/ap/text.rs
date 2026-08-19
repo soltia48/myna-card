@@ -548,9 +548,9 @@ pub struct ApBasicData {
     pub public_key_id: KeyId,
     /// `DF43`, 128 bytes, purpose unknown.
     ///
-    /// On every card examined it is 32 bytes followed by 96 `FF`, which is the shape of a digest in
-    /// a padded field — see [`digest`](Self::digest) — but nothing was found that it is a digest
-    /// *of*.
+    /// On every card examined it is 32 non-filler bytes followed by 96 `FF`. That length is
+    /// compatible with SHA-256, but exhaustive comparison with every contiguous range of the
+    /// saved card files found no match, so it is not identified as a digest.
     pub trailing: Vec<u8>,
 }
 
@@ -558,9 +558,10 @@ impl ApBasicData {
     /// Tag of the file.
     pub const TAG: u32 = 0xFF40;
 
-    /// The first 32 bytes of [`trailing`](Self::trailing), if the rest is `FF` filler.
+    /// The 32-byte candidate value in [`trailing`](Self::trailing), if the rest is `FF` filler.
     ///
-    /// `None` when the field is shaped differently, rather than a guess about what it holds.
+    /// The method name records the SHA-256-shaped hypothesis; it does not establish that the value
+    /// is a digest. `None` means that even that physical shape is absent.
     pub fn digest(&self) -> Option<&[u8]> {
         let (head, filler) = self.trailing.split_at_checked(32)?;
         filler.iter().all(|b| *b == 0xFF).then_some(head)
