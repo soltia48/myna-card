@@ -41,8 +41,8 @@ pub mod ef {
     /// Neither cardholder credential nor an accepted terminal certificate made it readable on
     /// the surveyed card.
     pub const UNKNOWN_0009: u16 = 0x0009;
-    /// Key reference the terminal's card-verifiable certificate is checked against, by
-    /// SET PUBLIC IC KEY. See [`crate::card::ins::SET_PUBLIC_IC_KEY`].
+    /// Key reference against which the proprietary `80 A2` command checks the terminal's
+    /// card-verifiable certificate. See [`crate::card::ins::PROPRIETARY_A2`].
     pub const TERMINAL_CA: u16 = 0x0016;
     /// User authentication certificate (利用者証明用証明書).
     pub const AUTH_CERTIFICATE: u16 = 0x000A;

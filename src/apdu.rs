@@ -37,9 +37,9 @@ pub mod cla {
 /// [`Card::read_binary`](crate::Card::read_binary) rather than with an extended `Le`.
 ///
 /// A longer data field switches to the extended encoding of JICSAP 6.1: `00` followed by a two
-/// byte `Lc`. The card needs this for at least two commands — SET PUBLIC IC KEY, `80 A2`, whose
-/// first block carries a 307 byte certificate body, and SET SESSION KEY, `80 AE`, which carries a
-/// 256 byte RSA cryptogram.
+/// byte `Lc`. The card needs this for at least two commands — the proprietary `80 A2`
+/// terminal-certificate command, whose first block carries a 307 byte certificate body, and SET
+/// SESSION KEY, `80 AE`, which carries a 256 byte RSA cryptogram.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Command {
     /// Class byte.
@@ -378,8 +378,8 @@ mod tests {
         assert_eq!(short[..5], [0x80, 0xA2, 0x06, 0xC1, 0xFF]);
         assert_eq!(short.len(), 5 + 255);
 
-        // Extended beyond it: 00 then a two byte Lc. This is what SET PUBLIC IC KEY needs — its
-        // first block carries a 307 byte certificate body.
+        // Extended beyond it: 00 then a two byte Lc. The proprietary 80 A2 command needs this for
+        // the 307 byte certificate body in its first block.
         let long = Command::with_data(0x80, 0xA2, 0x06, 0xC1, vec![0xAA; 307])
             .to_bytes()
             .unwrap();
