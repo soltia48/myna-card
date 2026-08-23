@@ -96,6 +96,10 @@ impl<'a, T: Transmit> MasterFile<'a, T> {
     /// The Individual Number Card does not implement a trustworthy ISO SELECT MF command, but its
     /// default Issuer Security Domain AID is selectable. On the surveyed card this restores the
     /// same GET DATA objects as a cold reset, even after an application DF was current.
+    ///
+    /// Selecting this state also leaves the current application DF and clears the security status
+    /// established there. It can therefore be used before re-selecting an application to ensure a
+    /// VERIFY performed by an earlier connection is no longer in effect.
     pub fn select(card: &'a mut Card<T>) -> Result<Self> {
         card.select_df(&crate::ap::DEFAULT_DF)?;
         Ok(MasterFile { card })

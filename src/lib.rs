@@ -73,15 +73,20 @@
 //! available. Implement [`Transmit`] for another card link and pass it to [`Card::new`] to use
 //! them without PC/SC. Methods gated by `verify` or `sm` are absent rather than becoming no-ops.
 //!
-//! # Security status outlives your program
+//! # Security status can outlive your program
 //!
-//! A successful VERIFY stays in effect until the card leaves the field. On a real card, neither
-//! dropping the connection nor reconnecting with `SCARD_RESET_CARD` clears it — only
-//! `SCARD_UNPOWER_CARD` does. Selecting a different application clears the one you left
-//! (JICSAP 5.1.3 rule 3), but re-selecting the same one does not (rule 2).
+//! A successful VERIFY remains in effect while its application DF stays current. On a real card,
+//! neither dropping the connection nor reconnecting with `SCARD_RESET_CARD` clears it by itself,
+//! and re-selecting the same application keeps it (JICSAP 5.1.3 rule 2).
 //!
-//! So a fresh process is not a fresh card. If your code needs to know that a file was genuinely
-//! unlocked by the PIN it just presented, read it before the VERIFY too and check it was locked.
+//! Leaving that DF does clear its security status (rule 3). This includes selecting a different
+//! application or selecting the MF state with [`MasterFile::select`]. `SCARD_UNPOWER_CARD` also
+//! clears it by resetting the whole card.
+//!
+//! So a fresh process is not necessarily a fresh card. Before a PIN-sensitive operation, select
+//! the MF and then the required application, or power-cycle the card. If the code must prove that
+//! a file was unlocked by the PIN it just presented, also read it before VERIFY and check that it
+//! was locked.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

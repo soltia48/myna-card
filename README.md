@@ -103,9 +103,10 @@ quietly in either direction.
 `Sharing::Shared` is the PC/SC default and the right one for reading: several programs can ask a
 card what it is at once without disturbing each other.
 
-Signing is different. A successful VERIFY stays in effect until the card leaves the field, so
-between presenting a PIN and powering the card down, any other process on the machine can sign with
-the key you unlocked — without knowing the PIN. `Sharing::Exclusive` closes that window:
+Signing is different. A successful VERIFY remains in effect while its application stays selected;
+dropping the connection or performing a warm reset does not clear it. Until the application is
+left or the card is powered down, another process can sign with the key you unlocked — without
+knowing the PIN. `Sharing::Exclusive` closes that window:
 
 ```rust
 use myna_card::transport::pcsc::{self, Sharing};
@@ -118,6 +119,11 @@ same terms rather than quietly giving the reservation up. Connecting fails with
 `pcsc::Error::SharingViolation` if something already has the card — the holder keeps it, so this is
 a reservation to take when the key needs it and release as soon as you are done. What it locks out
 is the card's other legitimate users.
+
+Selecting a different application clears the security status of the application being left. To
+return explicitly to a clean state without a power cycle, call `MasterFile::select`, drop that
+wrapper, and then select the required application again. Re-selecting the same application is not
+enough. `power_cycle` remains the way to reset the whole card.
 
 ### Secure messaging
 

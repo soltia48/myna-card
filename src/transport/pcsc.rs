@@ -30,10 +30,11 @@ pub fn list_readers() -> Result<Vec<String>> {
 /// PC/SC lets several processes hold one card at once, and for reading that is the right default:
 /// two programs can each ask the card what it is without getting in each other's way.
 ///
-/// It is the wrong default for signing. A successful VERIFY stays in effect until the card leaves
-/// the field — see [`PcscTransport::power_cycle`] — so between presenting a PIN and powering the
-/// card down, anything else on the machine can use the key this connection unlocked, without
-/// knowing the PIN. [`Sharing::Exclusive`] is what closes that window.
+/// It is the wrong default for signing. A successful VERIFY remains in effect until its
+/// application is left or the card is powered down — merely dropping or resetting a connection
+/// does not clear it. During that interval, anything else on the machine can use the key this
+/// connection unlocked without knowing the PIN. [`Sharing::Exclusive`] closes that window. See
+/// [`crate::MasterFile::select`] and [`PcscTransport::power_cycle`] for the two cleanup paths.
 ///
 /// There is deliberately no [`Default`]. Which of these a program wants follows from what it is
 /// about to do with the card, and the wrong one fails silently in opposite directions: sharing
@@ -151,10 +152,12 @@ impl PcscTransport {
 
     /// Power the card down and back up.
     ///
-    /// This is the only thing that clears the card's security status. A warm reset does not, and
-    /// neither does disconnecting and reconnecting: whatever was verified stays verified until the
-    /// card leaves the field. It is also what makes the master file current again, which is the
-    /// state [`crate::mf::MasterFile`] needs.
+    /// This clears all card state, including every security status. A warm reset does not clear a
+    /// status by itself, and neither does disconnecting and reconnecting. Power cycling is not the
+    /// only way to clear the status of the current application: selecting the MF through
+    /// [`crate::MasterFile::select`], or selecting a different application, leaves that DF and
+    /// clears its status. Power cycling additionally resets the card as a whole and makes the
+    /// master-file state current.
     ///
     /// The first command after the card comes back is answered 6F00 on the card this was measured
     /// against, so one throwaway SELECT is sent and its result discarded — otherwise every caller

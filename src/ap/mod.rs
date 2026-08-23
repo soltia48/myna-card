@@ -25,7 +25,8 @@
 //! accepts the AID. Dropping the wrapper releases its Rust borrow but sends no APDU: the
 //! application remains current, and a security status established there remains on the physical
 //! card. Selecting a *different* application clears the status of the application being left;
-//! selecting the same one again does not reliably provide a clean session.
+//! selecting the same one again does not reliably provide a clean session. Selecting the MF state
+//! through [`crate::MasterFile::select`] also leaves the application and clears its status.
 //!
 //! The wrappers' `card` methods are escape hatches for lower-level operations. They do not
 //! re-select the application afterward, so a caller that uses one to select another DF must not
