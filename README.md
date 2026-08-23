@@ -13,7 +13,7 @@ The transport, APDU and file-access layers are implemented and unit tested, and 
 layouts have been worked out are decoded into types rather than handed back as bytes: the 個人番号,
 the 基本4情報, the card info record, the card face with its images, and the card-verifiable
 certificates. Files whose layout has not been worked out are still reachable, as raw bytes, through
-each application's `read_ef`.
+the application wrappers' `read_ef` or `read_record` methods, according to the EF structure.
 
 ## Layers
 
@@ -44,6 +44,36 @@ transparent files.
 `Card` is generic over the transport, so everything above it can be exercised without a physical
 card. `transport::mock::MockTransport` replays a fixed script of responses and records what was
 sent; the unit tests in `card.rs` and `ap/jpki.rs` show the pattern.
+
+## Installation
+
+Add the crate with its default PC/SC and signature-verification support:
+
+```sh
+cargo add myna-card
+```
+
+The crate's features are:
+
+| Feature | Default | Enables |
+|---|---:|---|
+| `pcsc` | yes | Access to physical readers through `transport::pcsc`. |
+| `verify` | yes | X.509 parsing and RSA signature verification. |
+| `sm` | no | AES secure messaging for the 券面入力補助AP; also enables `verify`. |
+| `mock` | no | The scripted `transport::mock` backend for downstream tests. |
+
+For secure messaging, enable `sm` explicitly:
+
+```sh
+cargo add myna-card --features sm
+```
+
+For another card link, disable the defaults and implement `transport::Transmit`. Add `verify`
+back if the application still wants the built-in signature checks:
+
+```sh
+cargo add myna-card --no-default-features --features verify
+```
 
 ## Usage
 
@@ -219,11 +249,18 @@ skips the files it guards rather than costing a retry. `data::verification_code_
 from the date of birth, expiry year and security code — note that the card wants the date of birth
 as a **Japanese era** year.
 
-Other examples:
+The repository contains these runnable examples:
 
 ```sh
+cargo run --example list_readers
 cargo run --example dump_certificates -- /tmp
+cargo run --example read_card -- --pin 1234 --birth-date 550217 --out /tmp
+cargo run --features sm --example secure_messaging -- 1234
 ```
+
+`list_readers` only identifies readers and cards. `dump_certificates` writes the freely readable
+JPKI certificates. `read_card` reads and verifies the data unlocked by the credentials supplied.
+`secure_messaging` demonstrates an encrypted 照合番号A and read.
 
 ## Retry counters
 
@@ -237,10 +274,15 @@ every attempt after that. A key with no retry limit answers `6300` and never rep
 
 ## Requirements
 
+These apply when the default `pcsc` feature is enabled:
+
 - A PC/SC stack. On Linux that is `pcscd` plus the `libpcsclite` development headers; on macOS and
   Windows it is part of the OS.
 - A contactless or contact reader. The card is a Type B contactless card and also works over a
   contact interface.
+
+Neither is required for parsing saved data, using `transport::mock`, or supplying another
+`transport::Transmit` implementation with `pcsc` disabled.
 
 ## Not implemented yet
 
