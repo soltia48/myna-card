@@ -85,6 +85,15 @@ pub struct Date {
 
 impl Date {
     /// Parse eight ASCII digits, `YYYYMMDD`.
+    ///
+    /// This validates the representation and the ranges `01..=12` and `01..=31`. It does not
+    /// apply month lengths or leap-year rules, so values such as `20230231` remain representable;
+    /// callers that accept dates from outside the card should perform full calendar validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Malformed`] unless the input is exactly eight ASCII digits with a month
+    /// and day in those ranges.
     pub fn parse(bytes: &[u8]) -> Result<Self> {
         let text = std::str::from_utf8(bytes)
             .ok()
@@ -145,12 +154,16 @@ impl fmt::Display for Date {
 
 /// A Japanese era.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[allow(missing_docs)]
 pub enum Era {
+    /// 明治, beginning 1868-01-25.
     Meiji,
+    /// 大正, beginning 1912-07-30.
     Taisho,
+    /// 昭和, beginning 1926-12-25.
     Showa,
+    /// 平成, beginning 1989-01-08.
     Heisei,
+    /// 令和, beginning 2019-05-01.
     Reiwa,
 }
 
@@ -217,6 +230,13 @@ pub struct MyNumber([u8; 12]);
 
 impl MyNumber {
     /// Parse twelve ASCII digits.
+    ///
+    /// This is a representation check only. It deliberately does not decide whether the number
+    /// was issued or validate its check digit; authenticity comes from the signed card record.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Malformed`] if the input is not exactly twelve ASCII decimal digits.
     pub fn parse(bytes: &[u8]) -> Result<Self> {
         let digits: [u8; 12] = bytes
             .try_into()
@@ -317,7 +337,15 @@ impl RsaPublicKey {
     /// Tag of the modulus.
     pub const TAG_MODULUS: u32 = 0x91;
 
-    /// Parse the concatenated `90` and `91` objects.
+    /// Parse the concatenated `90` (exponent) and `91` (modulus) BER-TLV objects.
+    ///
+    /// Unknown sibling objects are ignored, and if either required tag occurs more than once the
+    /// last value is used. The integers remain in their original big-endian representation;
+    /// leading zero bytes are not removed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Malformed`] for invalid BER-TLV or when either required object is absent.
     pub fn parse(data: &[u8]) -> Result<Self> {
         let mut exponent = None;
         let mut modulus = None;
@@ -533,6 +561,9 @@ pub enum ImageFormat {
 
 impl ImageFormat {
     /// Identify an image by its leading bytes.
+    ///
+    /// This recognises the eight-byte PNG signature and the JP2 signature-box marker. It does not
+    /// decode or validate the rest of the image, so a matching prefix is sufficient.
     pub fn detect(data: &[u8]) -> Self {
         if data.starts_with(b"\x89PNG\r\n\x1a\n") {
             ImageFormat::Png

@@ -17,7 +17,8 @@
 //! the interface by anyone who watches a legitimate exchange.
 //!
 //! EF `0002` also carries the expiry, which is ten of the fourteen digits of 照合番号B once the
-//! date of birth is counted — see [`verification_code_b`](crate::data::verification_code_b). See [`crate::sm`].
+//! date of birth is counted — see [`verification_code_b`](crate::data::verification_code_b). The
+//! `sm` module documents why secure messaging is only available in the other surface application.
 
 use crate::card::{Card, Retries};
 use crate::data::{
@@ -320,7 +321,8 @@ pub struct CardFace {
     /// The security code printed on the card face, rendered. 24×12 on the card surveyed. Also
     /// after the signature, and also not covered by it.
     pub security_code_image: Image,
-    /// The three groups the signature covers, each hashed separately. See [`CardFace::verify`].
+    /// The three groups the signature covers, each hashed separately. With the `verify` feature,
+    /// `CardFace::verify` checks them.
     pub signed_segments: [Vec<u8>; 3],
 }
 

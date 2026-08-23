@@ -2,6 +2,17 @@
 //!
 //! Section numbers in this module refer to the JICSAP specification of IC cards with contacts
 //! complying with Japanese Industrial Standard, version 1.1 (July 1998).
+//!
+//! # Card state
+//!
+//! ISO 7816 operations are stateful: SELECT FILE changes the current DF or EF, READ RECORD may
+//! move a record pointer, and a successful VERIFY establishes a security status. [`Card`] sends
+//! those operations but does not cache their state, so it cannot become stale if another command
+//! changes it. The application wrappers in [`crate::ap`] use a mutable borrow to keep one selected
+//! application in control at a time.
+//!
+//! The transport may still refer to a card that was already selected or verified before
+//! [`Card::new`] was called. Construction and destruction send no APDUs and do not reset the card.
 
 use crate::apdu::{Command, Response, StatusWord, cla};
 use crate::error::{Error, Result};
@@ -146,22 +157,33 @@ pub struct Card<T> {
 }
 
 impl<T: Transmit> Card<T> {
-    /// Wrap a transport.
+    /// Wrap a transport without sending a command or changing card state.
+    ///
+    /// In particular this does not select the master file, reset retry counters, or clear a
+    /// security status left by an earlier connection.
     pub fn new(transport: T) -> Self {
         Card { transport }
     }
 
     /// Borrow the underlying transport.
+    ///
+    /// This is primarily for transport-specific inspection such as checking the PC/SC sharing
+    /// mode. Sending an APDU by some interior-mutability mechanism would bypass [`Card::call`]'s
+    /// response handling.
     pub fn transport(&self) -> &T {
         &self.transport
     }
 
     /// Mutably borrow the underlying transport.
+    ///
+    /// Commands sent directly through it can change the selected file and security status. The
+    /// card layer keeps no cached state, but the caller remains responsible for the sequencing of
+    /// subsequent operations.
     pub fn transport_mut(&mut self) -> &mut T {
         &mut self.transport
     }
 
-    /// Give back the underlying transport.
+    /// Give back the underlying transport without disconnecting or resetting it.
     pub fn into_transport(self) -> T {
         self.transport
     }
@@ -170,7 +192,17 @@ impl<T: Transmit> Card<T> {
     ///
     /// Two conventions are handled transparently: a 6Cxx reply causes the command to be resent
     /// with the corrected `Le`, and a 61xx reply causes the remaining data to be collected with
-    /// GET RESPONSE. The status word returned is the one that ended the exchange.
+    /// GET RESPONSE. The status word returned is the one that ended the exchange. At most one
+    /// 6Cxx correction is attempted; a repeated 6Cxx is returned to the caller.
+    ///
+    /// This method does not require a successful status. Use [`Card::call_ok`] for the common
+    /// `9000`-only path, or inspect [`Response::status`] when warnings and proprietary statuses
+    /// carry meaning.
+    ///
+    /// # Errors
+    ///
+    /// Returns APDU-encoding errors, transport errors, or [`Error::ShortResponse`] for any raw
+    /// response in the initial, corrected, or chained exchange that lacks SW1-SW2.
     pub fn call(&mut self, command: &Command) -> Result<Response> {
         let mut response = self.transmit_once(command)?;
 
@@ -197,7 +229,12 @@ impl<T: Transmit> Card<T> {
         Ok(response)
     }
 
-    /// Send a command and return its data, failing unless the status word is 9000.
+    /// Send a command and return its data, failing unless the final status word is `9000`.
+    ///
+    /// # Errors
+    ///
+    /// In addition to [`Card::call`] errors, returns the classified card error described by
+    /// [`Response::into_data`] for a non-success status.
     pub fn call_ok(&mut self, command: &Command) -> Result<Vec<u8>> {
         self.call(command)?.into_data()
     }
@@ -242,7 +279,16 @@ impl<T: Transmit> Card<T> {
         Ok(())
     }
 
-    /// SELECT FILE, selecting an elementary file under the current DF by its identifier.
+    /// SELECT FILE, selecting an elementary file under the current DF by its two-byte identifier.
+    ///
+    /// A successful selection makes this the current EF and resets its record pointer. The method
+    /// requests no file-control information, so its successful return value contains no metadata
+    /// about the selected file.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Status`] when the identifier does not exist under the current DF or the
+    /// file cannot be selected, in addition to transport and response-parsing errors.
     pub fn select_ef(&mut self, id: u16) -> Result<()> {
         // P1=02: select an EF under the current DF by file ID. P2=0C: no FCI output.
         self.call_ok(&Command::with_data(
@@ -259,6 +305,12 @@ impl<T: Transmit> Card<T> {
     ///
     /// `le` is how many bytes to ask for, at most 256. Per JICSAP 6.4.1 (4) the card reads to the
     /// end of the file within that limit, so it may return fewer bytes than requested.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::OffsetOutOfRange`] above offset `32767`. `le` is validated during APDU
+    /// encoding and produces [`Error::ExpectedLengthOutOfRange`] unless it is `1..=65536`; values
+    /// above 256 are encodable but are not a short READ BINARY accepted by this card.
     pub fn read_binary_chunk(&mut self, offset: usize, le: u32) -> Result<Vec<u8>> {
         if offset > MAX_OFFSET {
             return Err(Error::OffsetOutOfRange(offset));
@@ -408,6 +460,11 @@ impl<T: Transmit> Card<T> {
     ///
     /// Not every card implements the multi-record form; one that does not answers 6A81 ("feature
     /// not provided"), in which case read the records one at a time.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidRecordNumber`] for record zero before sending anything. Card and
+    /// transport failures are returned unchanged.
     pub fn read_records_from(&mut self, first: u8) -> Result<Vec<u8>> {
         if first == 0 {
             return Err(Error::InvalidRecordNumber);

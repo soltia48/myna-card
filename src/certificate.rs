@@ -22,7 +22,15 @@ pub struct Certificate {
 }
 
 impl Certificate {
-    /// Parse a DER encoded certificate.
+    /// Parse one complete DER encoded X.509 certificate and retain its original bytes.
+    ///
+    /// Parsing checks the DER and X.509 structure only. It does not verify the certificate's
+    /// signature, validity period, purpose or revocation status; see [`Certificate::verify_to_root`]
+    /// for the signature and date checks this crate can perform.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Malformed`] if `der` is not a valid certificate encoding.
     pub fn parse(der: &[u8]) -> Result<Self> {
         let inner = x509_cert::Certificate::from_der(der)
             .map_err(|e| malformed(&format!("not a DER X.509 certificate: {e}")))?;
@@ -32,12 +40,18 @@ impl Certificate {
         })
     }
 
-    /// The certificate as it came off the card.
+    /// The complete DER encoding supplied to [`Certificate::parse`].
+    ///
+    /// The returned bytes are retained separately rather than re-encoded from [`Self::inner`], so
+    /// callers can persist or compare the exact input.
     pub fn der(&self) -> &[u8] {
         &self.der
     }
 
     /// The parsed certificate, for anything this wrapper does not expose.
+    ///
+    /// This provides read-only access to the `x509-cert` representation; mutating it cannot make
+    /// [`Self::der`] disagree with the parsed value.
     pub fn inner(&self) -> &x509_cert::Certificate {
         &self.inner
     }
@@ -68,17 +82,23 @@ impl Certificate {
         })
     }
 
-    /// Subject distinguished name, rendered.
+    /// Subject distinguished name rendered with `x509-cert`'s display format.
+    ///
+    /// Use [`Self::inner`] when structured relative distinguished names are needed; this string is
+    /// intended for display and diagnostics rather than identity comparison.
     pub fn subject(&self) -> String {
         self.inner.tbs_certificate().subject().to_string()
     }
 
-    /// Issuer distinguished name, rendered.
+    /// Issuer distinguished name rendered with `x509-cert`'s display format.
+    ///
+    /// [`roots::issuer_of`] uses this only to narrow candidates and confirms the result by
+    /// verifying the signature.
     pub fn issuer(&self) -> String {
         self.inner.tbs_certificate().issuer().to_string()
     }
 
-    /// Serial number, big-endian.
+    /// Serial number as unsigned big-endian bytes, without formatting or hexadecimal conversion.
     pub fn serial_number(&self) -> Vec<u8> {
         self.inner
             .tbs_certificate()

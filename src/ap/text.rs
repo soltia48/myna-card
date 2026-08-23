@@ -12,8 +12,8 @@
 //! # Secure messaging
 //!
 //! This is the only application on the card that offers it, and the only one that publishes a key
-//! to deliver a session key to. See [`crate::sm`] for the mechanism and for what it does and does
-//! not protect, and [`TextAp::open_secure_session`] to open a session.
+//! to deliver a session key to. With the `sm` feature, the `sm` module documents the mechanism and
+//! what it does and does not protect, and `TextAp::open_secure_session` opens a session.
 //!
 //! The other applications answer SET SESSION KEY without ever implementing what it asks for. None
 //! answers `6D00`, so the instruction exists card-wide; they differ in why they refuse:
@@ -160,7 +160,7 @@ impl<'a, T: Transmit> TextAp<'a, T> {
 
     /// Read the whole physical content of EF `0001`, filler included.
     ///
-    /// This is what [`IntegrityRecord::matches_my_number_file`] hashes.
+    /// With the `verify` feature, this is what `IntegrityRecord::matches_my_number_file` hashes.
     pub fn read_my_number_file(&mut self) -> Result<Vec<u8>> {
         self.card.select_ef(ef::MY_NUMBER)?;
         self.card.read_binary_physical()
@@ -596,10 +596,10 @@ impl ApBasicData {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IntegrityRecord {
     /// SHA-256 of the 個人番号 file, over its **physical** content including the filler bytes.
-    /// See [`IntegrityRecord::matches_my_number_file`].
+    /// With the `verify` feature, see `IntegrityRecord::matches_my_number_file`.
     pub my_number_digest: [u8; 32],
     /// SHA-256 of the 基本4情報 file, over its outer value **with the offset table skipped**.
-    /// See [`IntegrityRecord::matches_attributes_file`].
+    /// With the `verify` feature, see `IntegrityRecord::matches_attributes_file`.
     pub attributes_digest: [u8; 32],
     /// Signature over everything before it.
     pub signature: Vec<u8>,
@@ -657,7 +657,8 @@ impl IntegrityRecord {
 /// Nothing here is secret. The modulus is readable by anyone who can present the PIN or either
 /// 照合番号, which is also why the card's habit of answering `6F00` for a ciphertext at or above
 /// the modulus and `6A80` for one below it costs nothing: it distinguishes what the reader can
-/// already compute. Pass this to [`TextAp::open_secure_session`] rather than using it directly.
+/// already compute. With the `sm` feature, pass this to `TextAp::open_secure_session` rather than
+/// using it directly.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionKeyPublicKey {
     /// The key.

@@ -43,6 +43,25 @@ pub struct Tlv<'a> {
 /// Parse the tag and length at the start of `data`.
 ///
 /// The value itself need not be present, so this works on a partially read file.
+///
+/// # Errors
+///
+/// Returns [`Error::Malformed`] if the tag or length is truncated, a tag needs more than four
+/// bytes, the length does not fit in [`usize`], or the indefinite-length form is used. A declared
+/// value longer than `data` is not an error here; [`parse`] checks that boundary.
+///
+/// # Example
+///
+/// ```
+/// use myna_card::tlv::ber;
+///
+/// // The four-byte header is enough even though the declared 0x120-byte value is absent.
+/// let header = ber::parse_header(&[0x30, 0x82, 0x01, 0x20])?;
+/// assert_eq!(header.tag, 0x30);
+/// assert_eq!(header.length, 0x120);
+/// assert_eq!(header.total_len(), 0x124);
+/// # Ok::<(), myna_card::Error>(())
+/// ```
 pub fn parse_header(data: &[u8]) -> Result<Header> {
     let mut pos = 0;
     let first = *data.first().ok_or_else(|| malformed("empty TLV"))?;
@@ -97,6 +116,14 @@ pub fn parse_header(data: &[u8]) -> Result<Header> {
 }
 
 /// Parse the first complete TLV object in `data`.
+///
+/// Bytes following the first object are ignored. Use [`iter`] to process concatenated objects.
+/// The returned [`Tlv::value`] borrows from `data` and excludes the encoded tag and length.
+///
+/// # Errors
+///
+/// Returns [`Error::Malformed`] for every header error described by [`parse_header`], or if the
+/// declared value is not fully present.
 pub fn parse(data: &[u8]) -> Result<Tlv<'_>> {
     let header = parse_header(data)?;
     let value = data
@@ -112,6 +139,9 @@ pub fn parse(data: &[u8]) -> Result<Tlv<'_>> {
 ///
 /// Iteration stops at the first filler byte (`0x00` or `0xFF`), which is how the card pads the
 /// unused tail of an elementary file.
+///
+/// A malformed object is yielded once as [`Err`], then the iterator is exhausted. Objects yielded
+/// before that error remain valid borrows of `data`.
 pub fn iter(data: &[u8]) -> Iter<'_> {
     Iter { rest: data }
 }

@@ -56,6 +56,24 @@ pub struct Tlv<'a> {
 /// Parse the tag and length at the start of `data`.
 ///
 /// The value itself need not be present, so this works on a partially read file.
+///
+/// # Errors
+///
+/// Returns [`Error::Malformed`] if the tag is [`TAG_INVALID`], if the tag or length is truncated,
+/// or if the two bytes following a long-form `FF` length marker are missing. The declared value
+/// need not be present; [`parse`] checks it.
+///
+/// # Example
+///
+/// ```
+/// use myna_card::tlv::simple;
+///
+/// let header = simple::parse_header(&[0x01, 0xFF, 0x01, 0x00])?;
+/// assert_eq!(header.tag, 0x01);
+/// assert_eq!(header.length, 256);
+/// assert_eq!(header.header_len, 4);
+/// # Ok::<(), myna_card::Error>(())
+/// ```
 pub fn parse_header(data: &[u8]) -> Result<Header> {
     let tag = *data.first().ok_or_else(|| malformed("empty TLV"))?;
     if tag == TAG_INVALID {
@@ -83,6 +101,15 @@ pub fn parse_header(data: &[u8]) -> Result<Header> {
 }
 
 /// Parse the first complete TLV object in `data`.
+///
+/// Bytes following the first object are ignored. Use [`iter`] for the concatenated response from
+/// a multi-record READ RECORD(S). The returned [`Tlv::value`] excludes the header and borrows from
+/// `data`.
+///
+/// # Errors
+///
+/// Returns [`Error::Malformed`] for every header error described by [`parse_header`], or if the
+/// complete declared value is not present.
 pub fn parse(data: &[u8]) -> Result<Tlv<'_>> {
     let header = parse_header(data)?;
     let value = data
@@ -107,6 +134,9 @@ pub fn parse(data: &[u8]) -> Result<Tlv<'_>> {
 /// Tag `FE` is not skipped either. The application folder list file uses it to mark a record as
 /// invalidated, but the object is otherwise well formed, so [`crate::mf::ApplicationFolders`]
 /// filters it rather than this iterator.
+///
+/// A malformed object is yielded once as [`Err`], after which the iterator is exhausted. Values
+/// yielded earlier continue to borrow their original bytes from `data`.
 pub fn iter(data: &[u8]) -> Iter<'_> {
     Iter { rest: data }
 }
@@ -152,6 +182,10 @@ impl<'a> Iterator for Iter<'a> {
 }
 
 /// Find the value of the first object with the given tag.
+///
+/// Returns `Ok(None)` when the iterator reaches the end or erased `FF` filler without finding the
+/// tag. An invalid object before the requested tag is returned as [`Error::Malformed`]; malformed
+/// bytes after an already found object are never inspected.
 pub fn find(data: &[u8], tag: u8) -> Result<Option<&[u8]>> {
     for tlv in iter(data) {
         let tlv = tlv?;

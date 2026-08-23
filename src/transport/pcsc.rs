@@ -7,6 +7,15 @@ use crate::error::{Error, Result};
 use crate::transport::Transmit;
 
 /// Return the names of the readers currently known to the PC/SC service.
+///
+/// Names are converted lossily to UTF-8 so every platform reader name can be represented as a
+/// [`String`]. An empty vector means the PC/SC service is available but currently knows no
+/// readers; [`connect_any`] converts that condition to [`Error::NoReader`].
+///
+/// # Errors
+///
+/// Returns [`Error::Pcsc`] if a context cannot be established or the reader list cannot be
+/// obtained from the service.
 pub fn list_readers() -> Result<Vec<String>> {
     let context = ::pcsc::Context::establish(::pcsc::Scope::User)?;
     Ok(context
@@ -124,11 +133,18 @@ impl PcscTransport {
     }
 
     /// How this connection is shared with anything else that talks to the card.
+    ///
+    /// This is the mode recorded at construction and used for reconnects. It does not query
+    /// whether another process currently has a compatible connection.
     pub fn sharing(&self) -> Sharing {
         self.sharing
     }
 
     /// The underlying PC/SC card, for operations this crate does not cover.
+    ///
+    /// Use [`Self::into_inner`] when ownership or a mutable PC/SC operation is required. Raw
+    /// commands sent outside [`Transmit`] bypass the APDU response handling in [`Card`]
+    /// and may change the selected file or security status.
     pub fn card(&self) -> &::pcsc::Card {
         &self.card
     }
@@ -143,6 +159,11 @@ impl PcscTransport {
     /// The first command after the card comes back is answered 6F00 on the card this was measured
     /// against, so one throwaway SELECT is sent and its result discarded — otherwise every caller
     /// would have to know that.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Pcsc`] if PC/SC cannot reconnect and power-cycle the card. The status and
+    /// transport result of the documented throwaway command are intentionally ignored.
     pub fn power_cycle(&mut self) -> Result<()> {
         self.card.reconnect(
             self.sharing.mode(),
@@ -154,7 +175,10 @@ impl PcscTransport {
         Ok(())
     }
 
-    /// Give back the underlying PC/SC card.
+    /// Give back the underlying PC/SC card without disconnecting or changing its disposition.
+    ///
+    /// The connection remains in the sharing mode reported by [`Self::sharing`]. Its eventual
+    /// drop follows the `pcsc` crate's normal disconnect behavior.
     pub fn into_inner(self) -> ::pcsc::Card {
         self.card
     }

@@ -3,8 +3,8 @@
 //! A card-verifiable certificate names its signing key by 証明者鍵ID and does not carry it, so a
 //! verifier has to hold the CA keys itself. These are the ones in circulation.
 //!
-//! To use a key you obtained yourself instead, pass it to
-//! [`CardVerifiableCertificate::verify_with`](crate::data::CardVerifiableCertificate::verify_with).
+//! With the `verify` feature, a key obtained independently can instead be passed to
+//! `CardVerifiableCertificate::verify_with`.
 //!
 //! # Coverage
 //!
@@ -171,8 +171,8 @@ const MODULUS_6000033: &[u8; 256] = &[
 ///
 /// To add one — a test hierarchy key, or a rotated production key — put its modulus in a
 /// `MODULUS_…` constant above and add a `CaKey` entry here. Nothing else needs to change:
-/// [`find`] and [`CardVerifiableCertificate::verify`](crate::data::CardVerifiableCertificate::verify)
-/// both go through this table.
+/// [`find`] and, with the `verify` feature, `CardVerifiableCertificate::verify` both go through
+/// this table.
 pub const KNOWN: &[CaKey] = &[
     CaKey {
         key_id: &[

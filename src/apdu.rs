@@ -40,6 +40,23 @@ pub mod cla {
 /// byte `Lc`. The card needs this for at least two commands — the proprietary `80 A2`
 /// terminal-certificate command, whose first block carries a 307 byte certificate body, and SET
 /// SESSION KEY, `80 AE`, which carries a 256 byte RSA cryptogram.
+///
+/// Construction does not fail: the fields stay available for inspection and modification, and
+/// [`Command::to_bytes`] validates the two length limits when the command is actually encoded.
+///
+/// # Example
+///
+/// ```
+/// use myna_card::Command;
+///
+/// // SELECT FILE by identifier, with no response data requested.
+/// let command = Command::with_data(0x00, 0xA4, 0x02, 0x0C, [0x00, 0x0A]);
+/// assert_eq!(
+///     command.to_bytes()?,
+///     [0x00, 0xA4, 0x02, 0x0C, 0x02, 0x00, 0x0A],
+/// );
+/// # Ok::<(), myna_card::Error>(())
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Command {
     /// Class byte.
@@ -61,7 +78,9 @@ pub struct Command {
 }
 
 impl Command {
-    /// Case 1: neither a data field nor `Le`.
+    /// Build a case 1 command: neither a data field nor `Le`.
+    ///
+    /// The four arguments become the APDU header unchanged.
     pub fn new(cla: u8, ins: u8, p1: u8, p2: u8) -> Self {
         Command {
             cla,
@@ -73,7 +92,10 @@ impl Command {
         }
     }
 
-    /// Case 2: `Le` only, expecting up to `le` bytes back.
+    /// Build a case 2 command: `Le` only, expecting up to `le` bytes back.
+    ///
+    /// `le` is the logical byte count, including 256 and 65536. Encoding maps those maxima to
+    /// the zero values required by the short and extended APDU forms.
     pub fn with_le(cla: u8, ins: u8, p1: u8, p2: u8, le: u32) -> Self {
         Command {
             cla,
@@ -85,7 +107,9 @@ impl Command {
         }
     }
 
-    /// Case 3: a data field only.
+    /// Build a case 3 command: a data field only.
+    ///
+    /// `Lc` is derived from the byte length of `data`; callers must not prefix it themselves.
     pub fn with_data(cla: u8, ins: u8, p1: u8, p2: u8, data: impl Into<Vec<u8>>) -> Self {
         Command {
             cla,
@@ -97,7 +121,9 @@ impl Command {
         }
     }
 
-    /// Case 4: both a data field and `Le`.
+    /// Build a case 4 command: both a data field and `Le`.
+    ///
+    /// The data length determines whether both `Lc` and `Le` use their short or extended form.
     pub fn with_data_le(
         cla: u8,
         ins: u8,
@@ -191,7 +217,16 @@ impl Response {
         })
     }
 
-    /// Return the data field if the status word indicates success, otherwise fail.
+    /// Return the data field if the status word is exactly [`StatusWord::SUCCESS`].
+    ///
+    /// Warning statuses (`62xx` and `63xx`) are errors here even when they accompany useful data.
+    /// Use [`Response::parse`] or [`Card::call`](crate::Card::call) when the caller needs to
+    /// inspect or accept such a response.
+    ///
+    /// # Errors
+    ///
+    /// Returns a classified PIN error for the retry-counter statuses understood by the crate, or
+    /// [`Error::Status`] for any other non-success status.
     pub fn into_data(self) -> Result<Vec<u8>> {
         if self.status.is_success() {
             Ok(self.data)
@@ -243,7 +278,10 @@ impl StatusWord {
         matches!(self.sw1(), 0x62 | 0x63)
     }
 
-    /// 61xx — xx more bytes are available via GET RESPONSE.
+    /// Decode `61xx`, where `xx` is the number of bytes available via GET RESPONSE.
+    ///
+    /// The returned value is the raw SW2 byte, including zero. A protocol profile may assign zero
+    /// a maximum-length meaning; this method does not reinterpret it.
     pub const fn more_data_available(self) -> Option<u8> {
         if self.sw1() == 0x61 {
             Some(self.sw2())
@@ -252,7 +290,10 @@ impl StatusWord {
         }
     }
 
-    /// 6Cxx — wrong `Le`; xx is the correct length.
+    /// Decode `6Cxx`, where `xx` is the correct short `Le`.
+    ///
+    /// A returned zero denotes 256 bytes. This method preserves the wire byte; [`crate::Card`]
+    /// converts it to the logical length when retrying a command.
     pub const fn correct_le(self) -> Option<u8> {
         if self.sw1() == 0x6C {
             Some(self.sw2())

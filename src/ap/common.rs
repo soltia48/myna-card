@@ -9,7 +9,7 @@
 //!
 //! No secure messaging. SET SESSION KEY answers `66F1`, "the security environment itself is
 //! faulty" — there is no key delivery configured here to satisfy, so presenting more credentials
-//! does not change it. See [`crate::sm`].
+//! does not change it. See the `sm` module when that feature is enabled.
 
 use crate::card::{Card, Retries, ShortEfId};
 use crate::data::{Date, malformed};

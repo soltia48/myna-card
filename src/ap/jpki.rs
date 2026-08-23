@@ -12,7 +12,7 @@
 //! No secure messaging reachable from here. SET SESSION KEY answers `6982` with both the user
 //! authentication PIN and the signature password presented, and `CLA=08` on a read answers `69FC`.
 //! What this application returns is a certificate or a signature — public values — so there is
-//! little for a session to protect. See [`crate::sm`].
+//! little for a session to protect. See the `sm` module when that feature is enabled.
 
 use crate::apdu::Command;
 use crate::card::{Card, Retries, ShortEfId, ins};

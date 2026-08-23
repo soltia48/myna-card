@@ -19,6 +19,18 @@
 //! The contents of several EFs are not yet understood; those are reachable through the generic
 //! `read_ef` and `read_record` methods rather than a named accessor.
 //!
+//! # Wrapper lifetime and state
+//!
+//! Each wrapper's `select` method sends SELECT FILE immediately and returns only after the card
+//! accepts the AID. Dropping the wrapper releases its Rust borrow but sends no APDU: the
+//! application remains current, and a security status established there remains on the physical
+//! card. Selecting a *different* application clears the status of the application being left;
+//! selecting the same one again does not reliably provide a clean session.
+//!
+//! The wrappers' `card` methods are escape hatches for lower-level operations. They do not
+//! re-select the application afterward, so a caller that uses one to select another DF must not
+//! assume subsequent wrapper methods still address the original application.
+//!
 //! # Short EF identifiers
 //!
 //! Every EF listed here has an identifier in `0001`-`001E`, so every one of them also has a short

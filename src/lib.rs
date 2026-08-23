@@ -8,9 +8,9 @@
 //! - [`ap`] — per-application (AP) DF/EF definitions and higher level accessors.
 //! - [`data`] — the values the card stores, and the credentials derived from them.
 //! - [`ca`] — CA keys for the 券面 card-verifiable certificates, and where they came from.
-//! - [`certificate`] — the X.509 certificates of the 公的個人認証AP.
+//! - `certificate` — the X.509 certificates of the 公的個人認証AP (`verify` feature).
 //! - [`mf`] — the files under the master file that the JICSAP specification itself defines.
-//! - [`sm`] — secure messaging with the 券面入力補助AP, the one application that offers it.
+//! - `sm` — secure messaging with the 券面入力補助AP (`sm` feature).
 //! - [`tlv`] — readers for the two TLV encodings the card uses.
 //!
 //! # Specification
@@ -59,6 +59,19 @@
 //! Every failed VERIFY decrements the card's retry counter. Once a counter reaches zero the
 //! corresponding PIN is blocked and can only be unblocked at a municipal office. Use
 //! [`Card::pin_retries`] to query the remaining attempts without consuming one.
+//!
+//! # Feature flags
+//!
+//! | Feature | Default | What it enables |
+//! |---|---:|---|
+//! | `pcsc` | yes | The `transport::pcsc` backend for physical readers. |
+//! | `verify` | yes | X.509 parsing and RSA signature verification. |
+//! | `sm` | no | `SecureSession` and AES secure messaging for the 券面入力補助AP; implies `verify`. |
+//! | `mock` | no | `transport::mock` for downstream integration tests. |
+//!
+//! With default features disabled, the APDU, file, application and parsing layers remain
+//! available. Implement [`Transmit`] for another card link and pass it to [`Card::new`] to use
+//! them without PC/SC. Methods gated by `verify` or `sm` are absent rather than becoming no-ops.
 //!
 //! # Security status outlives your program
 //!

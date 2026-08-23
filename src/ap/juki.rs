@@ -7,7 +7,7 @@
 //! No secure messaging reachable from here. SET SESSION KEY answers `6982` even with the PIN
 //! presented, and this application publishes no key to deliver a session key under. Unlike the
 //! `66F1` of the 共通カード and 券面事項確認 applications, `6982` says the card *has* something
-//! configured and the credential is not it. See [`crate::sm`].
+//! configured and the credential is not it. See the `sm` module when that feature is enabled.
 
 use crate::card::{Card, Retries};
 use crate::error::Result;
