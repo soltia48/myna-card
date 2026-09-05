@@ -69,8 +69,7 @@
 //! so a plaintext that is already block-aligned grows by a whole block.
 
 use aes::Aes128;
-use aes::cipher::generic_array::GenericArray;
-use aes::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use aes::cipher::{Block, BlockModeDecrypt, BlockModeEncrypt, KeyIvInit};
 
 use crate::apdu::{Command, StatusWord, cla};
 use crate::card::{Card, ShortEfId, ins};
@@ -332,7 +331,7 @@ impl<'a, T: Transmit> SecureSession<'a, T> {
         let mut block = [0u8; BLOCK];
         block[BLOCK - 4..].copy_from_slice(&n.to_be_bytes());
         let mut cipher = CbcEncryptor::new(&self.key.into(), &[0u8; BLOCK].into());
-        cipher.encrypt_block_mut(GenericArray::from_mut_slice(&mut block));
+        cipher.encrypt_block((&mut block).into());
         block
     }
 
@@ -341,9 +340,9 @@ impl<'a, T: Transmit> SecureSession<'a, T> {
         let iv = self.iv(self.counter);
         let mut buffer = pad(plaintext);
         let mut cipher = CbcEncryptor::new(&self.key.into(), &iv.into());
-        for block in buffer.chunks_exact_mut(BLOCK) {
-            cipher.encrypt_block_mut(GenericArray::from_mut_slice(block));
-        }
+        let (blocks, remainder) = Block::<CbcEncryptor>::slice_as_chunks_mut(&mut buffer);
+        debug_assert!(remainder.is_empty());
+        cipher.encrypt_blocks(blocks);
         buffer
     }
 
@@ -358,9 +357,9 @@ impl<'a, T: Transmit> SecureSession<'a, T> {
         let iv = self.iv(n);
         let mut buffer = ciphertext.to_vec();
         let mut cipher = CbcDecryptor::new(&self.key.into(), &iv.into());
-        for block in buffer.chunks_exact_mut(BLOCK) {
-            cipher.decrypt_block_mut(GenericArray::from_mut_slice(block));
-        }
+        let (blocks, remainder) = Block::<CbcDecryptor>::slice_as_chunks_mut(&mut buffer);
+        debug_assert!(remainder.is_empty());
+        cipher.decrypt_blocks(blocks);
         unpad(buffer)
     }
 }
